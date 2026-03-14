@@ -44,23 +44,7 @@ class RegisterController extends BaseController
             ->latest()
             ->get()
             ->map(function (User $user) {
-                [$firstName, $lastName] = $this->splitName($user->name);
-
-                return [
-                    'id' => $user->id,
-                    'first_name' => $firstName,
-                    'last_name' => $lastName,
-                    'name' => $user->name,
-                    'phone' => $user->phone,
-                    'email' => $user->email,
-                    'is_active' => (bool) $user->is_active,
-                    'role' => [
-                        'id' => $user->role?->id,
-                        'name' => $user->role?->name,
-                        'slug' => $user->role?->slug,
-                    ],
-                    'created_at' => $user->created_at,
-                ];
+                return $this->formatUser($user);
             })
             ->values();
 
@@ -87,7 +71,6 @@ class RegisterController extends BaseController
 
         $firstName = trim((string) $request->first_name);
         $lastName = trim((string) $request->last_name);
-        $fullName = trim($firstName . ' ' . $lastName);
         $email = strtolower(trim((string) $request->email));
         $phone = trim((string) $request->phone);
         $isActive = $request->boolean('is_active', true);
@@ -95,10 +78,11 @@ class RegisterController extends BaseController
         $generatedPassword = Str::random(12);
 
         $user = User::create([
-            'name'              => $fullName,
+            'first_name'        => $firstName,
+            'last_name'         => $lastName,
             'phone'             => $phone,
             'email'             => $email,
-            'password'          => bcrypt($generatedPassword),
+            'password'          => $generatedPassword,
             'role_id'           => (int) $request->role_id,
             'is_active'         => $isActive,
             'email_verified_at' => null,
@@ -109,12 +93,12 @@ class RegisterController extends BaseController
         $token = Password::broker()->createToken($user);
 
         $resetBaseUrl = rtrim(
-            env('FRONTEND_RESET_PASSWORD_URL', 'http://localhost:5173/reset-password'),
+            env('FRONTEND_RESET_PASSWORD_URL', 'https://www.d.ashbhub.com/reset-password'),
             '/'
         );
 
         $loginUrl = rtrim(
-            env('FRONTEND_LOGIN_URL', 'http://localhost:5173/login'),
+            env('FRONTEND_LOGIN_URL', 'https://www.d.ashbhub.com/login'),
             '/'
         );
 
@@ -129,7 +113,7 @@ class RegisterController extends BaseController
                 resetUrl: $resetUrl,
                 user: $user,
                 loginUrl: $loginUrl,
-                appName: config('app.name', 'Africa Safari')
+                appName: config('app.name', 'ASHBHUB')
             ));
 
             $emailSent = true;
@@ -142,21 +126,7 @@ class RegisterController extends BaseController
         }
 
         $success = [
-            'user' => [
-                'id'         => $user->id,
-                'first_name' => $firstName,
-                'last_name'  => $lastName,
-                'name'       => $user->name,
-                'phone'      => $user->phone,
-                'email'      => $user->email,
-                'is_active'  => (bool) $user->is_active,
-                'role'       => [
-                    'id'   => $user->role?->id,
-                    'name' => $user->role?->name,
-                    'slug' => $user->role?->slug,
-                ],
-                'created_at' => $user->created_at,
-            ],
+            'user' => $this->formatUser($user),
             'email_sent' => $emailSent,
             'reset_url' => $resetUrl,
         ];
@@ -209,14 +179,12 @@ class RegisterController extends BaseController
             'last_login_at' => now(),
         ]);
 
-        [$firstName, $lastName] = $this->splitName($user->name);
-
         $success = [
             'token' => $user->createToken('ASHB')->plainTextToken,
             'user'  => [
                 'id'            => $user->id,
-                'first_name'    => $firstName,
-                'last_name'     => $lastName,
+                'first_name'    => $user->first_name,
+                'last_name'     => $user->last_name,
                 'name'          => $user->name,
                 'phone'         => $user->phone,
                 'email'         => $user->email,
@@ -234,25 +202,24 @@ class RegisterController extends BaseController
     }
 
     /**
-     * Split name into first_name and last_name.
+     * Format user response.
      */
-    private function splitName(?string $fullName): array
+    private function formatUser(User $user): array
     {
-        $fullName = trim((string) $fullName);
-
-        if ($fullName === '') {
-            return ['', ''];
-        }
-
-        $parts = preg_split('/\s+/', $fullName);
-
-        if (!$parts || count($parts) === 1) {
-            return [$fullName, ''];
-        }
-
-        $firstName = array_shift($parts);
-        $lastName = implode(' ', $parts);
-
-        return [$firstName, $lastName];
+        return [
+            'id' => $user->id,
+            'first_name' => $user->first_name,
+            'last_name' => $user->last_name,
+            'name' => $user->name,
+            'phone' => $user->phone,
+            'email' => $user->email,
+            'is_active' => (bool) $user->is_active,
+            'role' => [
+                'id' => $user->role?->id,
+                'name' => $user->role?->name,
+                'slug' => $user->role?->slug,
+            ],
+            'created_at' => $user->created_at,
+        ];
     }
 }
