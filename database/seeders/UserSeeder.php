@@ -23,7 +23,8 @@ class UserSeeder extends Seeder
             User::updateOrCreate(
                 ['email' => 'ceo@africansafarihub.com'],
                 [
-                    'name' => 'Company CEO',
+                    'first_name' => 'Company',
+                    'last_name' => 'CEO',
                     'phone' => '0780000001',
                     'password' => Hash::make('password123'),
                     'role_id' => $ceoRole->id,
@@ -37,7 +38,8 @@ class UserSeeder extends Seeder
             User::updateOrCreate(
                 ['email' => 'md@africansafarihub.com'],
                 [
-                    'name' => 'Managing Director',
+                    'first_name' => 'Managing',
+                    'last_name' => 'Director',
                     'phone' => '0780000002',
                     'password' => Hash::make('password123'),
                     'role_id' => $mdRole->id,
@@ -51,7 +53,8 @@ class UserSeeder extends Seeder
             User::updateOrCreate(
                 ['email' => 'market@africansafarihub.com'],
                 [
-                    'name' => 'Chief of Market',
+                    'first_name' => 'Chief',
+                    'last_name' => 'of Market',
                     'phone' => '0780000003',
                     'password' => Hash::make('password123'),
                     'role_id' => $chiefMarketRole->id,
@@ -65,7 +68,8 @@ class UserSeeder extends Seeder
             User::updateOrCreate(
                 ['email' => 'employee@africansafarihub.com'],
                 [
-                    'name' => 'Employee User',
+                    'first_name' => 'Employee',
+                    'last_name' => 'User',
                     'phone' => '0780000004',
                     'password' => Hash::make('password123'),
                     'role_id' => $employeeRole->id,
