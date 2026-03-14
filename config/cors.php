@@ -12,10 +12,10 @@ return [
         'http://localhost:5173',
         'http://127.0.0.1:5173',
 
-        'https://www.asyncafrica.com',
-        'https://asyncafrica.com',
-        'http://www.asyncafrica.com',
-        'http://asyncafrica.com',
+        'https://d.ashbhub.com',
+        'https://www.d.ashbhub.com',
+        'http://d.ashbhub.com',
+        'http://www.d.ashbhub.com',
     ],
 
     'allowed_origins_patterns' => [
