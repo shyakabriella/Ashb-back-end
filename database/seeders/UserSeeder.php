@@ -34,5 +34,19 @@ class UserSeeder extends Seeder
             );
         }
 
+        if ($employeeRole) {
+            User::updateOrCreate(
+                ['email' => 'employee@africansafarihub.com'],
+                [
+                    'first_name' => 'Test',
+                    'last_name' => 'Employee',
+                    'phone' => '0780000000',
+                    'password' => Hash::make('password123'),
+                    'role_id' => $employeeRole->id,
+                    'is_active' => true,
+                    'email_verified_at' => now(),
+                ]
+            );
+        }
     }
 }

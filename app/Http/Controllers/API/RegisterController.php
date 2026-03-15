@@ -37,11 +37,42 @@ class RegisterController extends BaseController
     }
 
     /**
+     * Get current authenticated user.
+     */
+    public function me(Request $request): JsonResponse
+    {
+        /** @var \App\Models\User|null $user */
+        $user = $request->user();
+
+        if (!$user) {
+            return $this->sendError('Unauthorised.', [
+                'error' => 'User not authenticated.',
+            ], 401);
+        }
+
+        $user->load(['role', 'profile']);
+
+        if (!(bool) $user->is_active) {
+            if (method_exists($user, 'currentAccessToken') && $user->currentAccessToken()) {
+                $user->currentAccessToken()->delete();
+            }
+
+            return $this->sendError('Account disabled.', [
+                'error' => 'Your account is inactive. Please contact administrator.',
+            ], 403);
+        }
+
+        return $this->sendResponse([
+            'user' => $this->formatUser($user),
+        ], 'Authenticated user fetched successfully.');
+    }
+
+    /**
      * Get saved users for frontend.
      */
     public function users(): JsonResponse
     {
-        $users = User::with('role')
+        $users = User::with(['role', 'profile'])
             ->latest()
             ->get()
             ->map(function (User $user) {
@@ -59,11 +90,11 @@ class RegisterController extends BaseController
     {
         $validator = Validator::make($request->all(), [
             'first_name' => 'required|string|max:100',
-            'last_name'  => 'required|string|max:100',
-            'phone'      => 'required|string|max:20',
-            'email'      => 'required|string|email|max:255|unique:users,email',
-            'role_id'    => 'required|exists:roles,id',
-            'is_active'  => 'nullable|boolean',
+            'last_name' => 'required|string|max:100',
+            'phone' => 'required|string|max:20',
+            'email' => 'required|string|email|max:255|unique:users,email',
+            'role_id' => 'required|exists:roles,id',
+            'is_active' => 'nullable|boolean',
         ]);
 
         if ($validator->fails()) {
@@ -79,17 +110,19 @@ class RegisterController extends BaseController
         $generatedPassword = Str::random(12);
 
         $user = User::create([
-            'first_name'        => $firstName,
-            'last_name'         => $lastName,
-            'phone'             => $phone,
-            'email'             => $email,
-            'password'          => Hash::make($generatedPassword),
-            'role_id'           => (int) $request->role_id,
-            'is_active'         => $isActive,
+            'first_name' => $firstName,
+            'last_name' => $lastName,
+            'phone' => $phone,
+            'email' => $email,
+            'password' => Hash::make($generatedPassword),
+            'role_id' => (int) $request->role_id,
+            'is_active' => $isActive,
             'email_verified_at' => null,
         ]);
 
-        $user->load('role');
+        $user->profile()->firstOrCreate([]);
+
+        $user->load(['role', 'profile']);
 
         $token = Password::broker()->createToken($user);
 
@@ -103,9 +136,7 @@ class RegisterController extends BaseController
             '/'
         );
 
-        $resetUrl = $resetBaseUrl
-            . '?token=' . urlencode($token)
-            . '&email=' . urlencode($user->email);
+        $resetUrl = $resetBaseUrl . '?token=' . urlencode($token) . '&email=' . urlencode($user->email);
 
         $emailSent = false;
 
@@ -121,8 +152,8 @@ class RegisterController extends BaseController
         } catch (\Throwable $e) {
             Log::error('Failed to send account setup email for admin-created user.', [
                 'user_id' => $user->id,
-                'email'   => $user->email,
-                'error'   => $e->getMessage(),
+                'email' => $user->email,
+                'error' => $e->getMessage(),
             ]);
         }
 
@@ -142,10 +173,6 @@ class RegisterController extends BaseController
 
     /**
      * Send forgot password link.
-     *
-     * Note:
-     * This works best if your User model already overrides
-     * sendPasswordResetNotification($token) to send the FRONTEND reset URL.
      */
     public function forgotPassword(Request $request): JsonResponse
     {
@@ -167,7 +194,7 @@ class RegisterController extends BaseController
             ], 404);
         }
 
-        if (!$user->is_active) {
+        if (!(bool) $user->is_active) {
             return $this->sendError('Account disabled.', [
                 'error' => 'This account is inactive. Please contact administrator.',
             ], 403);
@@ -248,7 +275,7 @@ class RegisterController extends BaseController
     public function login(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'email'    => 'required|email',
+            'email' => 'required|email',
             'password' => 'required|string',
         ]);
 
@@ -259,7 +286,7 @@ class RegisterController extends BaseController
         $email = strtolower(trim((string) $request->email));
 
         if (!Auth::attempt([
-            'email'    => $email,
+            'email' => $email,
             'password' => $request->password,
         ])) {
             return $this->sendError('Unauthorised.', [
@@ -268,9 +295,9 @@ class RegisterController extends BaseController
         }
 
         /** @var \App\Models\User|null $user */
-        $user = User::with('role')->find(Auth::id());
+        $user = User::with(['role', 'profile'])->find(Auth::id());
 
-        if (!$user || !$user->is_active) {
+        if (!$user || !(bool) $user->is_active) {
             Auth::logout();
 
             return $this->sendError('Account disabled.', [
@@ -284,20 +311,7 @@ class RegisterController extends BaseController
 
         $success = [
             'token' => $user->createToken('ASHB')->plainTextToken,
-            'user'  => [
-                'id'            => $user->id,
-                'first_name'    => $user->first_name,
-                'last_name'     => $user->last_name,
-                'phone'         => $user->phone,
-                'email'         => $user->email,
-                'is_active'     => (bool) $user->is_active,
-                'last_login_at' => $user->last_login_at,
-                'role'          => [
-                    'id'   => $user->role?->id,
-                    'name' => $user->role?->name,
-                    'slug' => $user->role?->slug,
-                ],
-            ],
+            'user' => $this->formatUser($user),
         ];
 
         return $this->sendResponse($success, 'User login successfully.');
@@ -308,18 +322,38 @@ class RegisterController extends BaseController
      */
     private function formatUser(User $user): array
     {
+        $user->loadMissing(['role', 'profile']);
+
+        $fullName = trim(($user->first_name ?? '') . ' ' . ($user->last_name ?? ''));
+
         return [
             'id' => $user->id,
+            'name' => $fullName,
+            'full_name' => $fullName,
             'first_name' => $user->first_name,
             'last_name' => $user->last_name,
             'phone' => $user->phone,
             'email' => $user->email,
             'is_active' => (bool) $user->is_active,
             'last_login_at' => $user->last_login_at,
+            'role_name' => $user->role?->name,
+            'role_slug' => $user->role?->slug,
             'role' => [
                 'id' => $user->role?->id,
                 'name' => $user->role?->name,
                 'slug' => $user->role?->slug,
+            ],
+            'dob' => $user->profile?->date_of_birth?->format('Y-m-d'),
+            'avatar' => $user->profile?->avatar,
+            'avatar_url' => $user->profile?->avatar
+                ? asset('storage/' . $user->profile->avatar)
+                : null,
+            'profile' => [
+                'dob' => $user->profile?->date_of_birth?->format('Y-m-d'),
+                'avatar' => $user->profile?->avatar,
+                'avatar_url' => $user->profile?->avatar
+                    ? asset('storage/' . $user->profile->avatar)
+                    : null,
             ],
             'created_at' => $user->created_at,
         ];
