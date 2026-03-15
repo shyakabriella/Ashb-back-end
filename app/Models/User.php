@@ -44,7 +44,6 @@ class User extends Authenticatable
      * @var array<int, string>
      */
     protected $appends = [
-        'name',
         'role_name',
         'role_slug',
     ];
@@ -67,11 +66,6 @@ class User extends Authenticatable
     public function role()
     {
         return $this->belongsTo(Role::class);
-    }
-
-    public function getNameAttribute(): string
-    {
-        return trim(($this->first_name ?? '') . ' ' . ($this->last_name ?? ''));
     }
 
     public function getRoleNameAttribute(): ?string
