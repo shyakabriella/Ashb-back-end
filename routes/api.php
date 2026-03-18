@@ -1,9 +1,12 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\API\RegisterController;
+use App\Http\Controllers\API\ClientController;
 use App\Http\Controllers\API\ProfileController;
 use App\Http\Controllers\API\PropertyController;
+use App\Http\Controllers\API\RegisterController;
+use App\Http\Controllers\API\BookingController;
+use App\Http\Controllers\API\TaskController;
 
 Route::controller(RegisterController::class)->group(function () {
     Route::post('login', 'login');
@@ -25,4 +28,20 @@ Route::middleware('auth:sanctum')->group(function () {
     });
 
     Route::apiResource('properties', PropertyController::class);
+    Route::apiResource('clients', ClientController::class);
+
+    Route::controller(BookingController::class)->group(function () {
+        Route::post('bookings/parse-reservation-pdf', 'parseReservationPdf');
+    });
+
+    Route::controller(TaskController::class)->group(function () {
+        Route::get('tasks', 'index');
+        Route::post('tasks', 'store');
+        Route::get('tasks/{task}', 'show');
+        Route::put('tasks/{task}', 'update');
+        Route::delete('tasks/{task}', 'destroy');
+
+        Route::post('tasks/{task}/assign-workers', 'assignWorkers');
+        Route::get('my-tasks', 'myTasks');
+    });
 });
