@@ -4,12 +4,16 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\Task;
+use App\Models\TaskUpdate;
+use App\Models\TaskUpdateAttachment;
 use App\Models\User;
 use App\Notifications\TaskAssignedNotification;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -31,6 +35,87 @@ class TaskController extends Controller
     }
 
     /**
+     * Relations for listing tasks.
+     */
+    private function taskListRelations(): array
+    {
+        return [
+            'property',
+            'creator',
+            'workers',
+            'latestUpdate.user',
+            'latestUpdate.attachments',
+        ];
+    }
+
+    /**
+     * Relations for showing one task with full history.
+     */
+    private function taskShowRelations(): array
+    {
+        return [
+            'property',
+            'creator',
+            'workers',
+            'latestUpdate.user',
+            'latestUpdate.attachments',
+            'updates.user',
+            'updates.attachments',
+        ];
+    }
+
+    /**
+     * Employee update validation.
+     */
+    private function employeeUpdateRules(): array
+    {
+        return [
+            'status' => ['required', Rule::in($this->allowedStatuses())],
+            'comment' => ['nullable', 'string'],
+
+            'voice_note' => ['nullable', 'file', 'mimes:webm,wav,mp3,ogg,m4a', 'max:20480'],
+
+            'images' => ['nullable', 'array'],
+            'images.*' => ['file', 'image', 'max:10240'],
+
+            'videos' => ['nullable', 'array'],
+            'videos.*' => ['file', 'mimes:mp4,mov,avi,webm,mkv', 'max:102400'],
+
+            'documents' => ['nullable', 'array'],
+            'documents.*' => ['file', 'mimes:pdf,doc,docx,xls,xlsx,ppt,pptx,txt,csv,zip', 'max:51200'],
+        ];
+    }
+
+    /**
+     * Admin update validation.
+     */
+    private function adminUpdateRules(): array
+    {
+        return [
+            'propertyId' => ['sometimes', 'exists:properties,id'],
+            'taskName' => ['sometimes', 'string', 'max:255'],
+            'description' => ['nullable', 'string'],
+            'milestone' => ['nullable', 'string', 'max:255'],
+            'startAt' => ['sometimes', 'date'],
+            'endAt' => ['sometimes', 'date'],
+            'status' => ['sometimes', Rule::in($this->allowedStatuses())],
+
+            'comment' => ['nullable', 'string'],
+
+            'voice_note' => ['nullable', 'file', 'mimes:webm,wav,mp3,ogg,m4a', 'max:20480'],
+
+            'images' => ['nullable', 'array'],
+            'images.*' => ['file', 'image', 'max:10240'],
+
+            'videos' => ['nullable', 'array'],
+            'videos.*' => ['file', 'mimes:mp4,mov,avi,webm,mkv', 'max:102400'],
+
+            'documents' => ['nullable', 'array'],
+            'documents.*' => ['file', 'mimes:pdf,doc,docx,xls,xlsx,ppt,pptx,txt,csv,zip', 'max:51200'],
+        ];
+    }
+
+    /**
      * List tasks.
      * - Employee sees only assigned tasks
      * - Admin/other roles can see all tasks
@@ -39,7 +124,7 @@ class TaskController extends Controller
     {
         $user = $request->user();
 
-        $query = Task::with(['property', 'creator', 'workers']);
+        $query = Task::with($this->taskListRelations());
 
         if ($this->isEmployee($user)) {
             $query->whereHas('workers', function ($q) use ($user) {
@@ -74,7 +159,7 @@ class TaskController extends Controller
             ], 403);
         }
 
-        $task->load(['property', 'creator', 'workers']);
+        $task->load($this->taskShowRelations());
 
         return response()->json([
             'success' => true,
@@ -154,7 +239,7 @@ class TaskController extends Controller
                     }
                 }
 
-                $saved[] = $task->load(['property', 'workers', 'creator']);
+                $saved[] = $task->load($this->taskShowRelations());
             }
 
             return $saved;
@@ -169,8 +254,8 @@ class TaskController extends Controller
 
     /**
      * Update one task.
-     * - Employee: can update only status, and only on assigned task
-     * - Admin/other roles: can update full task
+     * - Employee: can update status + comment/files, and only on assigned task
+     * - Admin/other roles: can update full task + comment/files
      */
     public function update(Request $request, Task $task): JsonResponse
     {
@@ -184,15 +269,30 @@ class TaskController extends Controller
                 ], 403);
             }
 
-            $validated = $request->validate([
-                'status' => ['required', Rule::in($this->allowedStatuses())],
-            ]);
+            $validated = $request->validate($this->employeeUpdateRules());
 
-            $task->update([
-                'status' => $validated['status'],
-            ]);
+            $oldStatus = (string) $task->status;
 
-            $task->load(['property', 'workers', 'creator']);
+            DB::transaction(function () use ($task, $validated, $request, $user, $oldStatus) {
+                $task->update([
+                    'status' => $validated['status'],
+                ]);
+
+                $statusChanged = $oldStatus !== (string) $task->status;
+
+                if ($this->hasUpdatePayload($request, $validated, $statusChanged)) {
+                    $this->createTaskUpdateFromRequest(
+                        task: $task,
+                        user: $user,
+                        request: $request,
+                        comment: $validated['comment'] ?? null,
+                        statusFrom: $statusChanged ? $oldStatus : (string) $task->status,
+                        statusTo: (string) $task->status,
+                    );
+                }
+            });
+
+            $task->load($this->taskShowRelations());
 
             return response()->json([
                 'success' => true,
@@ -201,15 +301,9 @@ class TaskController extends Controller
             ]);
         }
 
-        $validated = $request->validate([
-            'propertyId' => ['sometimes', 'exists:properties,id'],
-            'taskName' => ['sometimes', 'string', 'max:255'],
-            'description' => ['nullable', 'string'],
-            'milestone' => ['nullable', 'string', 'max:255'],
-            'startAt' => ['sometimes', 'date'],
-            'endAt' => ['sometimes', 'date'],
-            'status' => ['sometimes', Rule::in($this->allowedStatuses())],
-        ]);
+        $validated = $request->validate($this->adminUpdateRules());
+
+        $oldStatus = (string) $task->status;
 
         $startAt = array_key_exists('startAt', $validated)
             ? Carbon::parse($validated['startAt'])
@@ -225,21 +319,36 @@ class TaskController extends Controller
             ]);
         }
 
-        $task->update([
-            'property_id' => $validated['propertyId'] ?? $task->property_id,
-            'title' => $validated['taskName'] ?? $task->title,
-            'description' => array_key_exists('description', $validated)
-                ? $validated['description']
-                : $task->description,
-            'milestone' => array_key_exists('milestone', $validated)
-                ? $validated['milestone']
-                : $task->milestone,
-            'start_at' => $startAt,
-            'end_at' => $endAt,
-            'status' => $validated['status'] ?? $task->status,
-        ]);
+        DB::transaction(function () use ($task, $validated, $request, $user, $startAt, $endAt, $oldStatus) {
+            $task->update([
+                'property_id' => $validated['propertyId'] ?? $task->property_id,
+                'title' => $validated['taskName'] ?? $task->title,
+                'description' => array_key_exists('description', $validated)
+                    ? $validated['description']
+                    : $task->description,
+                'milestone' => array_key_exists('milestone', $validated)
+                    ? $validated['milestone']
+                    : $task->milestone,
+                'start_at' => $startAt,
+                'end_at' => $endAt,
+                'status' => $validated['status'] ?? $task->status,
+            ]);
 
-        $task->load(['property', 'workers', 'creator']);
+            $statusChanged = $oldStatus !== (string) $task->status;
+
+            if ($this->hasUpdatePayload($request, $validated, $statusChanged)) {
+                $this->createTaskUpdateFromRequest(
+                    task: $task,
+                    user: $user,
+                    request: $request,
+                    comment: $validated['comment'] ?? null,
+                    statusFrom: $statusChanged ? $oldStatus : (string) $task->status,
+                    statusTo: (string) $task->status,
+                );
+            }
+        });
+
+        $task->load($this->taskShowRelations());
 
         return response()->json([
             'success' => true,
@@ -262,7 +371,23 @@ class TaskController extends Controller
             ], 403);
         }
 
-        $task->delete();
+        DB::transaction(function () use ($task) {
+            $task->load(['updates.attachments']);
+
+            foreach ($task->updates as $update) {
+                foreach ($update->attachments as $attachment) {
+                    if ($attachment->file_path) {
+                        Storage::disk($attachment->disk ?: 'public')->delete($attachment->file_path);
+                    }
+                }
+
+                $update->attachments()->delete();
+            }
+
+            $task->updates()->delete();
+            $task->workers()->detach();
+            $task->delete();
+        });
 
         return response()->json([
             'success' => true,
@@ -315,7 +440,7 @@ class TaskController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Workers assigned successfully.',
-            'data' => $task->load(['property', 'workers', 'creator']),
+            'data' => $task->load($this->taskShowRelations()),
         ]);
     }
 
@@ -325,7 +450,7 @@ class TaskController extends Controller
      */
     public function myTasks(Request $request): JsonResponse
     {
-        $tasks = Task::with(['property', 'creator', 'workers'])
+        $tasks = Task::with($this->taskListRelations())
             ->whereHas('workers', function ($query) use ($request) {
                 $query->where('users.id', $request->user()->id);
             })
@@ -337,6 +462,131 @@ class TaskController extends Controller
             'message' => 'My assigned tasks fetched successfully.',
             'data' => $tasks,
         ]);
+    }
+
+    /**
+     * Save task update history and attachments.
+     */
+    private function createTaskUpdateFromRequest(
+        Task $task,
+        User $user,
+        Request $request,
+        ?string $comment,
+        ?string $statusFrom,
+        ?string $statusTo
+    ): TaskUpdate {
+        $taskUpdate = TaskUpdate::create([
+            'task_id' => $task->id,
+            'user_id' => $user->id,
+            'status_from' => $statusFrom,
+            'status_to' => $statusTo,
+            'comment' => filled($comment) ? trim((string) $comment) : null,
+        ]);
+
+        if ($request->hasFile('voice_note')) {
+            $file = $request->file('voice_note');
+
+            if ($file instanceof UploadedFile) {
+                $this->storeAttachmentFile(
+                    taskUpdate: $taskUpdate,
+                    file: $file,
+                    attachmentType: 'voice_note',
+                    folder: 'voice-notes'
+                );
+            }
+        }
+
+        foreach ($this->normalizeFiles($request->file('images')) as $file) {
+            $this->storeAttachmentFile(
+                taskUpdate: $taskUpdate,
+                file: $file,
+                attachmentType: 'image',
+                folder: 'images'
+            );
+        }
+
+        foreach ($this->normalizeFiles($request->file('videos')) as $file) {
+            $this->storeAttachmentFile(
+                taskUpdate: $taskUpdate,
+                file: $file,
+                attachmentType: 'video',
+                folder: 'videos'
+            );
+        }
+
+        foreach ($this->normalizeFiles($request->file('documents')) as $file) {
+            $this->storeAttachmentFile(
+                taskUpdate: $taskUpdate,
+                file: $file,
+                attachmentType: 'document',
+                folder: 'documents'
+            );
+        }
+
+        // Make task.updated_at reflect latest comment/file/status activity
+        $task->touch();
+
+        return $taskUpdate->load(['user', 'attachments']);
+    }
+
+    /**
+     * Store one attachment file.
+     */
+    private function storeAttachmentFile(
+        TaskUpdate $taskUpdate,
+        UploadedFile $file,
+        string $attachmentType,
+        string $folder
+    ): TaskUpdateAttachment {
+        $path = $file->store(
+            "task-updates/{$taskUpdate->task_id}/{$folder}",
+            'public'
+        );
+
+        return TaskUpdateAttachment::create([
+            'task_update_id' => $taskUpdate->id,
+            'attachment_type' => $attachmentType,
+            'disk' => 'public',
+            'file_name' => $file->getClientOriginalName(),
+            'file_path' => $path,
+            'mime_type' => $file->getClientMimeType() ?: $file->getMimeType(),
+            'file_size' => $file->getSize(),
+        ]);
+    }
+
+    /**
+     * Normalize uploaded files.
+     */
+    private function normalizeFiles(mixed $files): array
+    {
+        if ($files instanceof UploadedFile) {
+            return [$files];
+        }
+
+        if (!is_array($files)) {
+            return [];
+        }
+
+        return array_values(array_filter($files, fn ($file) => $file instanceof UploadedFile));
+    }
+
+    /**
+     * Check if request contains update log data.
+     */
+    private function hasUpdatePayload(Request $request, array $validated, bool $statusChanged): bool
+    {
+        if ($statusChanged) {
+            return true;
+        }
+
+        if (filled($validated['comment'] ?? null)) {
+            return true;
+        }
+
+        return $request->hasFile('voice_note')
+            || $request->hasFile('images')
+            || $request->hasFile('videos')
+            || $request->hasFile('documents');
     }
 
     /**

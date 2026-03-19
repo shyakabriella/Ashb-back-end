@@ -6,6 +6,8 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Task extends Model
 {
@@ -42,5 +44,15 @@ class Task extends Model
         return $this->belongsToMany(User::class, 'task_user', 'task_id', 'user_id')
             ->withPivot(['assigned_by', 'assigned_at'])
             ->withTimestamps();
+    }
+
+    public function updates(): HasMany
+    {
+        return $this->hasMany(TaskUpdate::class)->latest();
+    }
+
+    public function latestUpdate(): HasOne
+    {
+        return $this->hasOne(TaskUpdate::class)->latestOfMany();
     }
 }
