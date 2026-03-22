@@ -5,7 +5,6 @@ use App\Http\Controllers\API\ClientController;
 use App\Http\Controllers\API\ProfileController;
 use App\Http\Controllers\API\PropertyController;
 use App\Http\Controllers\API\RegisterController;
-use App\Http\Controllers\API\BookingController;
 use App\Http\Controllers\API\TaskController;
 use App\Http\Controllers\API\ContractController;
 
@@ -32,9 +31,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('clients', ClientController::class);
     Route::apiResource('contracts', ContractController::class);
 
-    Route::controller(BookingController::class)->group(function () {
-        Route::post('bookings/parse-reservation-pdf', 'parseReservationPdf');
-    });
+   
 
     Route::controller(TaskController::class)->group(function () {
         Route::get('tasks', 'index');

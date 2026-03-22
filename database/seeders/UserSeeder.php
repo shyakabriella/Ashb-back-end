@@ -14,35 +14,33 @@ class UserSeeder extends Seeder
      */
     public function run(): void
     {
-        $ceoRole = Role::where('slug', Role::CEO)->first();
-        $mdRole = Role::where('slug', Role::MD)->first();
-        $chiefMarketRole = Role::where('slug', Role::CHIEF_MARKET)->first();
-        $employeeRole = Role::where('slug', Role::EMPLOYEE)->first();
+        $roles = [
+           
+            Role::MD => [
+                'email' => 'md@africansafarihub.com',
+                'first_name' => 'Managing',
+                'last_name' => 'Director',
+                'phone' => '0782667889',
+            ],
+           
+        ];
 
-        if ($ceoRole) {
-            User::updateOrCreate(
-                ['email' => 'admin@africansafarihub.com'],
-                [
-                    'first_name' => 'Company',
-                    'last_name' => 'admin',
-                    'phone' => '0782667888',
-                    'password' => Hash::make('password123'),
-                    'role_id' => $ceoRole->id,
-                    'is_active' => true,
-                    'email_verified_at' => now(),
-                ]
-            );
-        }
+        foreach ($roles as $slug => $userData) {
+            $role = Role::where('slug', $slug)->first();
 
-        if ($employeeRole) {
+            if (!$role) {
+                $this->command?->warn("Role with slug '{$slug}' was not found. Skipping user creation.");
+                continue;
+            }
+
             User::updateOrCreate(
-                ['email' => 'employee@africansafarihub.com'],
+                ['email' => $userData['email']],
                 [
-                    'first_name' => 'Test',
-                    'last_name' => 'Employee',
-                    'phone' => '0780000000',
+                    'first_name' => $userData['first_name'],
+                    'last_name' => $userData['last_name'],
+                    'phone' => $userData['phone'],
                     'password' => Hash::make('password123'),
-                    'role_id' => $employeeRole->id,
+                    'role_id' => $role->id,
                     'is_active' => true,
                     'email_verified_at' => now(),
                 ]
