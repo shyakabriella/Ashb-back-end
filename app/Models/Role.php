@@ -13,6 +13,7 @@ class Role extends Model
     public const MD = 'md';
     public const CHIEF_MARKET = 'chief_market';
     public const EMPLOYEE = 'employee';
+    public const INTERN = 'intern';
 
     protected $fillable = [
         'name',
@@ -53,6 +54,12 @@ class Role extends Model
                 'name' => 'Employee',
                 'slug' => self::EMPLOYEE,
                 'description' => 'Standard employee with limited access.',
+                'is_active' => true,
+            ],
+            [
+                'name' => 'Intern',
+                'slug' => self::INTERN,
+                'description' => 'Intern with access to dashboard, tasks, and score only.',
                 'is_active' => true,
             ],
         ];

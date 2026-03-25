@@ -15,14 +15,26 @@ class UserSeeder extends Seeder
     public function run(): void
     {
         $roles = [
-           
             Role::MD => [
                 'email' => 'md@africansafarihub.com',
                 'first_name' => 'Managing',
                 'last_name' => 'Director',
                 'phone' => '0782667889',
             ],
-           
+
+            Role::EMPLOYEE => [
+                'email' => 'employee@africansafarihub.com',
+                'first_name' => 'System',
+                'last_name' => 'Employee',
+                'phone' => '0782667891',
+            ],
+
+            Role::INTERN => [
+                'email' => 'intern@africansafarihub.com',
+                'first_name' => 'System',
+                'last_name' => 'Intern',
+                'phone' => '0782667892',
+            ],
         ];
 
         foreach ($roles as $slug => $userData) {
