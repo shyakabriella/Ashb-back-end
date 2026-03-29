@@ -67,9 +67,6 @@ There are no active employee or intern tasks for today.
 @endforeach
 @endif
 
-<x-mail::button :url="$dashboardUrl">
-Open Task Dashboard
-</x-mail::button>
 
 Thanks,<br>
 {{ config('app.name') }}
