@@ -8,10 +8,12 @@ use App\Models\TaskUpdate;
 use App\Models\TaskUpdateAttachment;
 use App\Models\User;
 use App\Notifications\TaskAssignedNotification;
+use App\Notifications\TaskStatusChangedNotification;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
@@ -35,6 +37,30 @@ class TaskController extends Controller
     }
 
     /**
+     * Roles allowed to manage tasks.
+     */
+    private function managerRoles(): array
+    {
+        return [
+            'ceo',
+            'md',
+            'chief_market',
+            'admin',
+        ];
+    }
+
+    /**
+     * Roles allowed to be workers.
+     */
+    private function workerRoles(): array
+    {
+        return [
+            'employee',
+            'intern',
+        ];
+    }
+
+    /**
      * Relations for listing tasks.
      */
     private function taskListRelations(): array
@@ -42,7 +68,7 @@ class TaskController extends Controller
         return [
             'property',
             'creator',
-            'workers',
+            'workers.role',
             'latestUpdate.user',
             'latestUpdate.attachments',
         ];
@@ -56,7 +82,7 @@ class TaskController extends Controller
         return [
             'property',
             'creator',
-            'workers',
+            'workers.role',
             'latestUpdate.user',
             'latestUpdate.attachments',
             'updates.user',
@@ -65,9 +91,9 @@ class TaskController extends Controller
     }
 
     /**
-     * Employee update validation.
+     * Worker update validation.
      */
-    private function employeeUpdateRules(): array
+    private function workerUpdateRules(): array
     {
         return [
             'status' => ['required', Rule::in($this->allowedStatuses())],
@@ -87,9 +113,9 @@ class TaskController extends Controller
     }
 
     /**
-     * Admin update validation.
+     * Manager update validation.
      */
-    private function adminUpdateRules(): array
+    private function managerUpdateRules(): array
     {
         return [
             'propertyId' => ['sometimes', 'exists:properties,id'],
@@ -117,19 +143,31 @@ class TaskController extends Controller
 
     /**
      * List tasks.
-     * - Employee sees only assigned tasks
-     * - Admin/other roles can see all tasks
+     * - Employee/Intern sees only assigned tasks
+     * - CEO/MD/Chief Market/Admin sees all tasks
      */
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
 
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthenticated.',
+            ], 401);
+        }
+
         $query = Task::with($this->taskListRelations());
 
-        if ($this->isEmployee($user)) {
+        if ($this->isWorker($user)) {
             $query->whereHas('workers', function ($q) use ($user) {
                 $q->where('users.id', $user->id);
             });
+        } elseif (!$this->canManageTasks($user)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You are not allowed to view tasks.',
+            ], 403);
         }
 
         $tasks = $query
@@ -145,8 +183,6 @@ class TaskController extends Controller
 
     /**
      * Show one task.
-     * - Employee can only view tasks assigned to them
-     * - Admin/other roles can view all tasks
      */
     public function show(Request $request, Task $task): JsonResponse
     {
@@ -170,9 +206,19 @@ class TaskController extends Controller
 
     /**
      * Save many tasks for one property.
+     * Only CEO / MD / Chief Market / Admin can create tasks.
      */
     public function store(Request $request): JsonResponse
     {
+        $user = $request->user();
+
+        if (!$this->canManageTasks($user)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You are not allowed to create tasks.',
+            ], 403);
+        }
+
         $validated = $request->validate([
             'propertyId' => ['required', 'exists:properties,id'],
             'tasks' => ['required', 'array', 'min:1'],
@@ -197,6 +243,8 @@ class TaskController extends Controller
                     "tasks.$index.endAt" => 'End date and time must be after start date and time.',
                 ]);
             }
+
+            $this->validateAssignableUserIds($taskData['assigneeIds'] ?? [], "tasks.$index.assigneeIds");
         }
 
         $createdTasks = DB::transaction(function () use ($validated, $request) {
@@ -232,7 +280,7 @@ class TaskController extends Controller
 
                     $task->workers()->attach($attachData);
 
-                    $workers = User::whereIn('id', $assigneeIds)->get();
+                    $workers = $this->getAssignableUsers($assigneeIds);
 
                     foreach ($workers as $worker) {
                         $worker->notify(new TaskAssignedNotification($task));
@@ -254,14 +302,15 @@ class TaskController extends Controller
 
     /**
      * Update one task.
-     * - Employee: can update status + comment/files, and only on assigned task
-     * - Admin/other roles: can update full task + comment/files
+     * - Employee/Intern: can update status + comment/files, only assigned task
+     * - Managers: can update full task + comment/files
+     * - When status changes => notify CEO + MD
      */
     public function update(Request $request, Task $task): JsonResponse
     {
         $user = $request->user();
 
-        if ($this->isEmployee($user)) {
+        if ($this->isWorker($user)) {
             if (!$this->canAccessTask($user, $task)) {
                 return response()->json([
                     'success' => false,
@@ -269,16 +318,18 @@ class TaskController extends Controller
                 ], 403);
             }
 
-            $validated = $request->validate($this->employeeUpdateRules());
+            $validated = $request->validate($this->workerUpdateRules());
 
             $oldStatus = (string) $task->status;
+            $newStatus = $oldStatus;
 
-            DB::transaction(function () use ($task, $validated, $request, $user, $oldStatus) {
+            DB::transaction(function () use ($task, $validated, $request, $user, $oldStatus, &$newStatus) {
                 $task->update([
                     'status' => $validated['status'],
                 ]);
 
-                $statusChanged = $oldStatus !== (string) $task->status;
+                $newStatus = (string) $task->status;
+                $statusChanged = $oldStatus !== $newStatus;
 
                 if ($this->hasUpdatePayload($request, $validated, $statusChanged)) {
                     $this->createTaskUpdateFromRequest(
@@ -286,13 +337,17 @@ class TaskController extends Controller
                         user: $user,
                         request: $request,
                         comment: $validated['comment'] ?? null,
-                        statusFrom: $statusChanged ? $oldStatus : (string) $task->status,
-                        statusTo: (string) $task->status,
+                        statusFrom: $statusChanged ? $oldStatus : $newStatus,
+                        statusTo: $newStatus,
                     );
                 }
             });
 
             $task->load($this->taskShowRelations());
+
+            if ($oldStatus !== $newStatus) {
+                $this->notifyLeadersTaskStatusChanged($task, $oldStatus, $newStatus, $user);
+            }
 
             return response()->json([
                 'success' => true,
@@ -301,9 +356,17 @@ class TaskController extends Controller
             ]);
         }
 
-        $validated = $request->validate($this->adminUpdateRules());
+        if (!$this->canManageTasks($user)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You are not allowed to update this task.',
+            ], 403);
+        }
+
+        $validated = $request->validate($this->managerUpdateRules());
 
         $oldStatus = (string) $task->status;
+        $newStatus = $oldStatus;
 
         $startAt = array_key_exists('startAt', $validated)
             ? Carbon::parse($validated['startAt'])
@@ -319,7 +382,7 @@ class TaskController extends Controller
             ]);
         }
 
-        DB::transaction(function () use ($task, $validated, $request, $user, $startAt, $endAt, $oldStatus) {
+        DB::transaction(function () use ($task, $validated, $request, $user, $startAt, $endAt, $oldStatus, &$newStatus) {
             $task->update([
                 'property_id' => $validated['propertyId'] ?? $task->property_id,
                 'title' => $validated['taskName'] ?? $task->title,
@@ -334,7 +397,8 @@ class TaskController extends Controller
                 'status' => $validated['status'] ?? $task->status,
             ]);
 
-            $statusChanged = $oldStatus !== (string) $task->status;
+            $newStatus = (string) $task->status;
+            $statusChanged = $oldStatus !== $newStatus;
 
             if ($this->hasUpdatePayload($request, $validated, $statusChanged)) {
                 $this->createTaskUpdateFromRequest(
@@ -342,13 +406,17 @@ class TaskController extends Controller
                     user: $user,
                     request: $request,
                     comment: $validated['comment'] ?? null,
-                    statusFrom: $statusChanged ? $oldStatus : (string) $task->status,
-                    statusTo: (string) $task->status,
+                    statusFrom: $statusChanged ? $oldStatus : $newStatus,
+                    statusTo: $newStatus,
                 );
             }
         });
 
         $task->load($this->taskShowRelations());
+
+        if ($oldStatus !== $newStatus) {
+            $this->notifyLeadersTaskStatusChanged($task, $oldStatus, $newStatus, $user);
+        }
 
         return response()->json([
             'success' => true,
@@ -364,10 +432,10 @@ class TaskController extends Controller
     {
         $user = $request->user();
 
-        if ($this->isEmployee($user)) {
+        if (!$this->canManageTasks($user)) {
             return response()->json([
                 'success' => false,
-                'message' => 'Employees are not allowed to delete tasks.',
+                'message' => 'You are not allowed to delete tasks.',
             ], 403);
         }
 
@@ -396,15 +464,25 @@ class TaskController extends Controller
     }
 
     /**
-     * Assign more workers to an existing task.
-     * This adds new workers without removing old ones.
+     * Assign more workers to existing task.
      */
     public function assignWorkers(Request $request, Task $task): JsonResponse
     {
+        $user = $request->user();
+
+        if (!$this->canManageTasks($user)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You are not allowed to assign workers.',
+            ], 403);
+        }
+
         $validated = $request->validate([
             'assigneeIds' => ['required', 'array', 'min:1'],
             'assigneeIds.*' => ['integer', 'distinct', 'exists:users,id'],
         ]);
+
+        $this->validateAssignableUserIds($validated['assigneeIds'], 'assigneeIds');
 
         $currentWorkerIds = $task->workers()
             ->pluck('users.id')
@@ -430,7 +508,7 @@ class TaskController extends Controller
 
             $task->workers()->attach($attachData);
 
-            $workers = User::whereIn('id', $newWorkerIds)->get();
+            $workers = $this->getAssignableUsers($newWorkerIds);
 
             foreach ($workers as $worker) {
                 $worker->notify(new TaskAssignedNotification($task));
@@ -445,11 +523,19 @@ class TaskController extends Controller
     }
 
     /**
-     * Worker task box.
-     * Logged in worker sees tasks assigned to him/her.
+     * Logged-in worker sees only own tasks.
      */
     public function myTasks(Request $request): JsonResponse
     {
+        $user = $request->user();
+
+        if (!$this->isWorker($user)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Only employees and interns can access my tasks.',
+            ], 403);
+        }
+
         $tasks = Task::with($this->taskListRelations())
             ->whereHas('workers', function ($query) use ($request) {
                 $query->where('users.id', $request->user()->id);
@@ -523,7 +609,6 @@ class TaskController extends Controller
             );
         }
 
-        // Make task.updated_at reflect latest comment/file/status activity
         $task->touch();
 
         return $taskUpdate->load(['user', 'attachments']);
@@ -590,12 +675,12 @@ class TaskController extends Controller
     }
 
     /**
-     * Check if logged in user is employee.
+     * Normalized role slug.
      */
-    private function isEmployee(?User $user): bool
+    private function roleSlug(?User $user): string
     {
         if (!$user) {
-            return false;
+            return '';
         }
 
         $user->loadMissing('role');
@@ -603,13 +688,36 @@ class TaskController extends Controller
         $roleSlug = strtolower(trim((string) $user->role?->slug));
         $roleName = strtolower(trim((string) $user->role?->name));
 
-        return $roleSlug === 'employee'
-            || $roleName === 'employee'
-            || (int) $user->role_id === 4;
+        return $roleSlug !== '' ? $roleSlug : $roleName;
     }
 
     /**
-     * Check if user can access a task.
+     * Is employee or intern.
+     */
+    private function isWorker(?User $user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        return in_array($this->roleSlug($user), $this->workerRoles(), true)
+            || in_array((int) $user->role_id, [4, 5], true);
+    }
+
+    /**
+     * Is CEO / MD / Chief Market / Admin.
+     */
+    private function canManageTasks(?User $user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        return in_array($this->roleSlug($user), $this->managerRoles(), true);
+    }
+
+    /**
+     * Check task access.
      */
     private function canAccessTask(?User $user, Task $task): bool
     {
@@ -617,12 +725,110 @@ class TaskController extends Controller
             return false;
         }
 
-        if (!$this->isEmployee($user)) {
+        if ($this->canManageTasks($user)) {
             return true;
+        }
+
+        if (!$this->isWorker($user)) {
+            return false;
         }
 
         return $task->workers()
             ->where('users.id', $user->id)
             ->exists();
+    }
+
+    /**
+     * Only employee/intern can be assigned.
+     */
+    private function validateAssignableUserIds(array $assigneeIds, string $field = 'assigneeIds'): void
+    {
+        if (empty($assigneeIds)) {
+            return;
+        }
+
+        $users = User::with('role')
+            ->whereIn('id', $assigneeIds)
+            ->get();
+
+        $invalidUsers = $users->filter(function (User $user) {
+            return !$this->isWorker($user);
+        });
+
+        if ($invalidUsers->isNotEmpty()) {
+            $names = $invalidUsers
+                ->map(fn (User $user) => trim(($user->first_name ?? '') . ' ' . ($user->last_name ?? '')) ?: $user->email ?: ('User #' . $user->id))
+                ->values()
+                ->implode(', ');
+
+            throw ValidationException::withMessages([
+                $field => "Only employees and interns can be assigned tasks. Invalid selection: {$names}.",
+            ]);
+        }
+    }
+
+    /**
+     * Assignable users collection.
+     */
+    private function getAssignableUsers(array $userIds): Collection
+    {
+        if (empty($userIds)) {
+            return collect();
+        }
+
+        return User::with('role')
+            ->whereIn('id', $userIds)
+            ->get()
+            ->filter(fn (User $user) => $this->isWorker($user))
+            ->values();
+    }
+
+    /**
+     * CEO + MD recipients for task status notifications.
+     */
+    private function leaderRecipients(): Collection
+    {
+        return User::with('role')
+            ->where('is_active', true)
+            ->whereNotNull('email')
+            ->whereHas('role', function ($query) {
+                $query->whereIn('slug', ['ceo', 'md']);
+            })
+            ->get();
+    }
+
+    /**
+     * Notify CEO + MD when task status changes.
+     */
+    private function notifyLeadersTaskStatusChanged(
+        Task $task,
+        string $oldStatus,
+        string $newStatus,
+        ?User $changedBy = null
+    ): void {
+        if ($oldStatus === $newStatus) {
+            return;
+        }
+
+        $leaders = $this->leaderRecipients();
+
+        if ($leaders->isEmpty()) {
+            return;
+        }
+
+        $task->loadMissing(['property', 'workers.role', 'creator']);
+
+        $taskUrl = rtrim((string) env('FRONTEND_APP_URL', config('app.url')), '/')
+            . '/dashboard/tasks/' . $task->id;
+
+        foreach ($leaders as $leader) {
+            $leader->notify(new TaskStatusChangedNotification(
+                task: $task,
+                oldStatus: $oldStatus,
+                newStatus: $newStatus,
+                changedBy: $changedBy,
+                taskUrl: $taskUrl
+            ));
+        }
     }
 }
