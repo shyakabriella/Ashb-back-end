@@ -10,14 +10,17 @@
             <td align="center">
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px; background:#ffffff; border-radius:18px; overflow:hidden; border:1px solid #e5dcc8;">
                     <tr>
-                        <td style="padding:32px; background:linear-gradient(135deg, #5b6b3c, #8b6f3d);">
+                        <td style="padding:32px; background:linear-gradient(135deg, #599e1a, #ab5b00);">
                             <p style="margin:0; font-size:12px; letter-spacing:2px; text-transform:uppercase; color:#f8e7b5; font-weight:bold;">
                                 {{ $appName ?? 'Africa Safari' }}
                             </p>
+                            <center>
 
-                            <h1 style="margin:14px 0 0; font-size:28px; line-height:1.3; color:#ffffff;">
-                                Welcome to {{ $appName ?? 'Africa Safari' }}
-                            </h1>
+                            <h style="margin:14px 0 0; font-size:28px; line-height:1.3; color:#ffffff;">
+                                Welcome, <br> to <br> {{ $appName ?? 'Africa Safari' }}
+                            </h>
+
+                            </center>
 
                             <p style="margin:14px 0 0; font-size:15px; line-height:1.8; color:#f5f1e8;">
                                 Hello {{ $user->name ?? 'User' }},
