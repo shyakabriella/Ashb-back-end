@@ -31,16 +31,17 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('clients', ClientController::class);
     Route::apiResource('contracts', ContractController::class);
 
-   
-
     Route::controller(TaskController::class)->group(function () {
         Route::get('tasks', 'index');
         Route::post('tasks', 'store');
+
+        // keep special routes BEFORE tasks/{task}
+        Route::get('tasks/weekly-report', 'weeklyReport');
+        Route::get('my-tasks', 'myTasks');
+        Route::post('tasks/{task}/assign-workers', 'assignWorkers');
+
         Route::get('tasks/{task}', 'show');
         Route::put('tasks/{task}', 'update');
         Route::delete('tasks/{task}', 'destroy');
-
-        Route::post('tasks/{task}/assign-workers', 'assignWorkers');
-        Route::get('my-tasks', 'myTasks');
     });
 });

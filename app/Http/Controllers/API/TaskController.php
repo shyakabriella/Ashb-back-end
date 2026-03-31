@@ -551,6 +551,66 @@ class TaskController extends Controller
     }
 
     /**
+     * Auto-generate weekly report from Monday to Friday.
+     * - CEO / MD / Chief Market can see all employee + intern reports
+     * - Employee / Intern can see only own weekly report
+     *
+     * Query params:
+     * - week_start=2026-03-23   (optional, any date in the target week)
+     * - user_id=5               (optional, for leaders to inspect one worker)
+     */
+    public function weeklyReport(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthenticated.',
+            ], 401);
+        }
+
+        if (!$this->isWorker($user) && !$this->canViewAllWeeklyReports($user)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You are not allowed to view weekly reports.',
+            ], 403);
+        }
+
+        $requestedUserId = $request->filled('user_id')
+            ? (int) $request->integer('user_id')
+            : null;
+
+        if ($requestedUserId) {
+            $this->validateAssignableUserIds([$requestedUserId], 'user_id');
+        }
+
+        [$weekStart, $weekEnd] = $this->resolveWeeklyReportRange($request);
+
+        $workers = $this->resolveWeeklyReportSubjects(
+            authUser: $user,
+            requestedUserId: $requestedUserId
+        );
+
+        $reports = $workers
+            ->map(fn (User $worker) => $this->buildWeeklyWorkerReport($worker, $weekStart, $weekEnd))
+            ->values();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Weekly report generated successfully.',
+            'data' => [
+                'week_start' => $weekStart->toDateString(),
+                'week_end' => $weekEnd->toDateString(),
+                'generated_at' => now()->toDateTimeString(),
+                'can_view_all' => $this->canViewAllWeeklyReports($user),
+                'summary' => $this->buildWeeklyReportSummary($reports),
+                'reports' => $reports,
+            ],
+        ]);
+    }
+
+    /**
      * Save task update history and attachments.
      */
     private function createTaskUpdateFromRequest(
@@ -717,6 +777,18 @@ class TaskController extends Controller
     }
 
     /**
+     * CEO / MD / Chief Market / Admin can view all weekly reports.
+     */
+    private function canViewAllWeeklyReports(?User $user): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        return in_array($this->roleSlug($user), ['ceo', 'md', 'chief_market', 'admin'], true);
+    }
+
+    /**
      * Check task access.
      */
     private function canAccessTask(?User $user, Task $task): bool
@@ -830,5 +902,272 @@ class TaskController extends Controller
                 taskUrl: $taskUrl
             ));
         }
+    }
+
+    /**
+     * Resolve weekly range as Monday to Friday.
+     */
+    private function resolveWeeklyReportRange(Request $request): array
+    {
+        $referenceDate = $request->filled('week_start')
+            ? Carbon::parse((string) $request->input('week_start'))
+            : now();
+
+        $weekStart = $referenceDate->copy()->startOfWeek(Carbon::MONDAY)->startOfDay();
+        $weekEnd = $weekStart->copy()->addDays(4)->endOfDay();
+
+        return [$weekStart, $weekEnd];
+    }
+
+    /**
+     * Workers included in the requested weekly report.
+     */
+    private function resolveWeeklyReportSubjects(User $authUser, ?int $requestedUserId = null): Collection
+    {
+        if ($this->isWorker($authUser)) {
+            return collect([$authUser->loadMissing('role')]);
+        }
+
+        $query = User::with('role')
+            ->whereHas('role', function ($query) {
+                $query->whereIn('slug', $this->workerRoles());
+            });
+
+        if ($requestedUserId) {
+            $query->where('id', $requestedUserId);
+        }
+
+        return $query->orderBy('id')->get();
+    }
+
+    /**
+     * Build one worker weekly report.
+     *
+     * Logic:
+     * - tasks_received  => assigned within Monday-Friday
+     * - tasks_completed => worker changed task status to completed within Monday-Friday
+     * - tasks_approved  => manager approved those completed tasks within Monday-Friday
+     *
+     * Here "approved" means a manager-side status update to:
+     * - understandable
+     * - completed
+     */
+    private function buildWeeklyWorkerReport(User $worker, Carbon $weekStart, Carbon $weekEnd): array
+    {
+        $tasks = Task::with([
+            'property',
+            'workers' => function ($query) use ($worker) {
+                $query->where('users.id', $worker->id);
+            },
+            'updates.user.role',
+        ])
+            ->whereHas('workers', function ($query) use ($worker) {
+                $query->where('users.id', $worker->id);
+            })
+            ->get();
+
+        $receivedTasks = [];
+        $completedTasks = [];
+        $approvedTasks = [];
+
+        foreach ($tasks as $task) {
+            $assignedAt = null;
+            $workerRelation = $task->workers->first();
+
+            if ($workerRelation && $workerRelation->pivot && filled($workerRelation->pivot->assigned_at)) {
+                $assignedAt = Carbon::parse($workerRelation->pivot->assigned_at);
+            }
+
+            if ($assignedAt && $assignedAt->between($weekStart, $weekEnd, true)) {
+                $receivedTasks[$task->id] = [
+                    'id' => $task->id,
+                    'title' => $task->title,
+                    'status' => (string) $task->status,
+                    'property_id' => $task->property_id,
+                    'property_name' => $this->propertyLabel($task),
+                    'assigned_at' => $assignedAt->toDateTimeString(),
+                    'start_at' => optional($task->start_at)->toDateTimeString(),
+                    'end_at' => optional($task->end_at)->toDateTimeString(),
+                ];
+            }
+
+            $completionUpdate = collect($task->updates ?? [])
+                ->filter(function (TaskUpdate $update) use ($worker, $weekStart, $weekEnd) {
+                    return (int) $update->user_id === (int) $worker->id
+                        && strtolower((string) $update->status_to) === 'completed'
+                        && Carbon::parse($update->created_at)->between($weekStart, $weekEnd, true);
+                })
+                ->sortByDesc(fn (TaskUpdate $update) => $update->created_at)
+                ->first();
+
+            if ($completionUpdate) {
+                $completedTasks[$task->id] = [
+                    'id' => $task->id,
+                    'title' => $task->title,
+                    'status' => (string) $task->status,
+                    'property_id' => $task->property_id,
+                    'property_name' => $this->propertyLabel($task),
+                    'completed_at' => Carbon::parse($completionUpdate->created_at)->toDateTimeString(),
+                    'start_at' => optional($task->start_at)->toDateTimeString(),
+                    'end_at' => optional($task->end_at)->toDateTimeString(),
+                ];
+            }
+
+            $approvalUpdate = collect($task->updates ?? [])
+                ->filter(function (TaskUpdate $update) use ($weekStart, $weekEnd) {
+                    return $this->isManagerActor($update->user)
+                        && in_array(strtolower((string) $update->status_to), ['understandable', 'completed'], true)
+                        && Carbon::parse($update->created_at)->between($weekStart, $weekEnd, true);
+                })
+                ->sortByDesc(fn (TaskUpdate $update) => $update->created_at)
+                ->first();
+
+            if ($completionUpdate && $approvalUpdate) {
+                $approvedTasks[$task->id] = [
+                    'id' => $task->id,
+                    'title' => $task->title,
+                    'status' => (string) $task->status,
+                    'property_id' => $task->property_id,
+                    'property_name' => $this->propertyLabel($task),
+                    'approved_at' => Carbon::parse($approvalUpdate->created_at)->toDateTimeString(),
+                    'approved_by' => $this->userDisplayName($approvalUpdate->user),
+                    'start_at' => optional($task->start_at)->toDateTimeString(),
+                    'end_at' => optional($task->end_at)->toDateTimeString(),
+                ];
+            }
+        }
+
+        $receivedCount = count($receivedTasks);
+        $completedCount = count($completedTasks);
+        $approvedCount = count($approvedTasks);
+        $pendingApprovalCount = max($completedCount - $approvedCount, 0);
+
+        $completionRate = $receivedCount > 0
+            ? round(($completedCount / $receivedCount) * 100, 2)
+            : 0.0;
+
+        $approvalRate = $completedCount > 0
+            ? round(($approvedCount / $completedCount) * 100, 2)
+            : 0.0;
+
+        return [
+            'user' => [
+                'id' => $worker->id,
+                'name' => $this->userDisplayName($worker),
+                'email' => $worker->email,
+                'role' => $this->roleSlug($worker),
+            ],
+            'week' => [
+                'start' => $weekStart->toDateString(),
+                'end' => $weekEnd->toDateString(),
+            ],
+            'totals' => [
+                'tasks_received' => $receivedCount,
+                'tasks_completed' => $completedCount,
+                'tasks_approved' => $approvedCount,
+                'pending_approval' => $pendingApprovalCount,
+                'completion_rate' => $completionRate,
+                'approval_rate' => $approvalRate,
+            ],
+            'tasks' => [
+                'received' => array_values($receivedTasks),
+                'completed' => array_values($completedTasks),
+                'approved' => array_values($approvedTasks),
+            ],
+        ];
+    }
+
+    /**
+     * Summary across all worker reports.
+     */
+    private function buildWeeklyReportSummary(Collection $reports): array
+    {
+        $totalWorkers = $reports->count();
+
+        $tasksReceived = $reports->sum(fn ($report) => (int) data_get($report, 'totals.tasks_received', 0));
+        $tasksCompleted = $reports->sum(fn ($report) => (int) data_get($report, 'totals.tasks_completed', 0));
+        $tasksApproved = $reports->sum(fn ($report) => (int) data_get($report, 'totals.tasks_approved', 0));
+        $pendingApproval = $reports->sum(fn ($report) => (int) data_get($report, 'totals.pending_approval', 0));
+
+        $averageCompletionRate = $totalWorkers > 0
+            ? round($reports->avg(fn ($report) => (float) data_get($report, 'totals.completion_rate', 0)), 2)
+            : 0.0;
+
+        $averageApprovalRate = $totalWorkers > 0
+            ? round($reports->avg(fn ($report) => (float) data_get($report, 'totals.approval_rate', 0)), 2)
+            : 0.0;
+
+        return [
+            'total_workers' => $totalWorkers,
+            'tasks_received' => $tasksReceived,
+            'tasks_completed' => $tasksCompleted,
+            'tasks_approved' => $tasksApproved,
+            'pending_approval' => $pendingApproval,
+            'average_completion_rate' => $averageCompletionRate,
+            'average_approval_rate' => $averageApprovalRate,
+        ];
+    }
+
+    /**
+     * Identify manager-side actor.
+     */
+    private function isManagerActor(?User $user): bool
+    {
+        return $this->canManageTasks($user);
+    }
+
+    /**
+     * Best display name for user.
+     */
+    private function userDisplayName(?User $user): string
+    {
+        if (!$user) {
+            return 'User';
+        }
+
+        $fullName = trim(
+            collect([
+                $user->first_name ?? null,
+                $user->last_name ?? null,
+            ])->filter()->implode(' ')
+        );
+
+        if ($fullName !== '') {
+            return $fullName;
+        }
+
+        if (filled($user->name ?? null)) {
+            return (string) $user->name;
+        }
+
+        if (filled($user->full_name ?? null)) {
+            return (string) $user->full_name;
+        }
+
+        if (filled($user->email ?? null)) {
+            return (string) $user->email;
+        }
+
+        return 'User #' . $user->id;
+    }
+
+    /**
+     * Best display label for property.
+     */
+    private function propertyLabel(Task $task): ?string
+    {
+        $property = $task->property;
+
+        if (!$property) {
+            return null;
+        }
+
+        foreach (['name', 'title', 'property_name', 'hotel_name', 'label'] as $field) {
+            if (isset($property->{$field}) && filled($property->{$field})) {
+                return (string) $property->{$field};
+            }
+        }
+
+        return $task->property_id ? ('Property #' . $task->property_id) : null;
     }
 }
