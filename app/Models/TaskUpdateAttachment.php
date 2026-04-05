@@ -5,7 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class TaskUpdateAttachment extends Model
 {
@@ -23,6 +23,7 @@ class TaskUpdateAttachment extends Model
 
     protected $appends = [
         'file_url',
+        'public_url',
     ];
 
     public function taskUpdate(): BelongsTo
@@ -32,10 +33,58 @@ class TaskUpdateAttachment extends Model
 
     public function getFileUrlAttribute(): ?string
     {
-        if (!$this->file_path) {
+        return $this->resolvePublicUrl(
+            $this->attributes['file_path'] ?? null,
+            $this->attributes['disk'] ?? 'public'
+        );
+    }
+
+    public function getPublicUrlAttribute(): ?string
+    {
+        return $this->resolvePublicUrl(
+            $this->attributes['file_path'] ?? null,
+            $this->attributes['disk'] ?? 'public'
+        );
+    }
+
+    protected function resolvePublicUrl(?string $path, ?string $disk = 'public'): ?string
+    {
+        $raw = trim((string) $path);
+
+        if ($raw === '') {
             return null;
         }
 
-        return Storage::disk($this->disk ?: 'public')->url($this->file_path);
+        if (Str::startsWith($raw, ['http://', 'https://', '//', 'blob:', 'data:'])) {
+            return $raw;
+        }
+
+        $normalized = str_replace('\\', '/', $raw);
+        $normalized = ltrim($normalized, '/');
+
+        if (Str::startsWith($normalized, 'storage/app/public/')) {
+            $normalized = 'storage/' . Str::after($normalized, 'storage/app/public/');
+            return asset($normalized);
+        }
+
+        if (Str::startsWith($normalized, 'public/storage/')) {
+            $normalized = 'storage/' . Str::after($normalized, 'public/storage/');
+            return asset($normalized);
+        }
+
+        if ($disk === 'public') {
+            if (Str::startsWith($normalized, 'storage/')) {
+                return asset($normalized);
+            }
+
+            // filename only => cannot build safe url here
+            if (!Str::contains($normalized, '/')) {
+                return null;
+            }
+
+            return asset('storage/' . $normalized);
+        }
+
+        return asset($normalized);
     }
 }

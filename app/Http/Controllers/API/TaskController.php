@@ -444,8 +444,13 @@ class TaskController extends Controller
 
             foreach ($task->updates as $update) {
                 foreach ($update->attachments as $attachment) {
-                    if ($attachment->file_path) {
-                        Storage::disk($attachment->disk ?: 'public')->delete($attachment->file_path);
+                    $deletePath = $this->normalizeStoredAttachmentPath(
+                        $attachment->file_path,
+                        $attachment->disk ?: 'public'
+                    );
+
+                    if ($deletePath) {
+                        Storage::disk($attachment->disk ?: 'public')->delete($deletePath);
                     }
                 }
 
@@ -523,6 +528,81 @@ class TaskController extends Controller
     }
 
     /**
+     * Replace all workers on existing task.
+     */
+    public function syncWorkers(Request $request, Task $task): JsonResponse
+    {
+        $user = $request->user();
+
+        if (!$this->canManageTasks($user)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You are not allowed to replace workers.',
+            ], 403);
+        }
+
+        $validated = $request->validate([
+            'assigneeIds' => ['required', 'array', 'min:1'],
+            'assigneeIds.*' => ['integer', 'distinct', 'exists:users,id'],
+        ]);
+
+        $this->validateAssignableUserIds($validated['assigneeIds'], 'assigneeIds');
+
+        $newWorkerIds = collect($validated['assigneeIds'])
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+
+        $currentWorkerIds = $task->workers()
+            ->pluck('users.id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        DB::transaction(function () use ($task, $newWorkerIds, $currentWorkerIds, $request) {
+            $syncData = [];
+
+            foreach ($newWorkerIds as $userId) {
+                $existing = in_array($userId, $currentWorkerIds, true);
+
+                $syncData[$userId] = [
+                    'assigned_by' => $existing
+                        ? DB::raw('assigned_by')
+                        : $request->user()?->id,
+                    'assigned_at' => $existing
+                        ? DB::raw('assigned_at')
+                        : now(),
+                ];
+            }
+
+            $task->workers()->detach();
+
+            $attachData = [];
+            foreach ($newWorkerIds as $userId) {
+                $attachData[$userId] = [
+                    'assigned_by' => $request->user()?->id,
+                    'assigned_at' => now(),
+                ];
+            }
+
+            $task->workers()->attach($attachData);
+        });
+
+        $addedWorkerIds = array_values(array_diff($newWorkerIds, $currentWorkerIds));
+        $workers = $this->getAssignableUsers($addedWorkerIds);
+
+        foreach ($workers as $worker) {
+            $worker->notify(new TaskAssignedNotification($task));
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Workers replaced successfully.',
+            'data' => $task->load($this->taskShowRelations()),
+        ]);
+    }
+
+    /**
      * Logged-in worker sees only own tasks.
      */
     public function myTasks(Request $request): JsonResponse
@@ -556,8 +636,8 @@ class TaskController extends Controller
      * - Employee / Intern can see only own weekly report
      *
      * Query params:
-     * - week_start=2026-03-23   (optional, any date in the target week)
-     * - user_id=5               (optional, for leaders to inspect one worker)
+     * - week_start=2026-03-23
+     * - user_id=5
      */
     public function weeklyReport(Request $request): JsonResponse
     {
@@ -683,20 +763,53 @@ class TaskController extends Controller
         string $attachmentType,
         string $folder
     ): TaskUpdateAttachment {
-        $path = $file->store(
+        $storedPath = $file->store(
             "task-updates/{$taskUpdate->task_id}/{$folder}",
             'public'
         );
+
+        $normalizedPath = $this->normalizeStoredAttachmentPath($storedPath, 'public');
 
         return TaskUpdateAttachment::create([
             'task_update_id' => $taskUpdate->id,
             'attachment_type' => $attachmentType,
             'disk' => 'public',
             'file_name' => $file->getClientOriginalName(),
-            'file_path' => $path,
+            'file_path' => $normalizedPath,
             'mime_type' => $file->getClientMimeType() ?: $file->getMimeType(),
             'file_size' => $file->getSize(),
         ]);
+    }
+
+    /**
+     * Normalize public disk paths before saving/deleting.
+     */
+    private function normalizeStoredAttachmentPath(?string $path, string $disk = 'public'): ?string
+    {
+        $value = trim((string) $path);
+
+        if ($value === '') {
+            return null;
+        }
+
+        $value = str_replace('\\', '/', $value);
+        $value = ltrim($value, '/');
+
+        if ($disk === 'public') {
+            if (str_starts_with($value, 'storage/app/public/')) {
+                return substr($value, strlen('storage/app/public/'));
+            }
+
+            if (str_starts_with($value, 'public/storage/')) {
+                return substr($value, strlen('public/storage/'));
+            }
+
+            if (str_starts_with($value, 'storage/')) {
+                return substr($value, strlen('storage/'));
+            }
+        }
+
+        return $value;
     }
 
     /**
@@ -942,15 +1055,6 @@ class TaskController extends Controller
 
     /**
      * Build one worker weekly report.
-     *
-     * Logic:
-     * - tasks_received  => assigned within Monday-Friday
-     * - tasks_completed => worker changed task status to completed within Monday-Friday
-     * - tasks_approved  => manager approved those completed tasks within Monday-Friday
-     *
-     * Here "approved" means a manager-side status update to:
-     * - understandable
-     * - completed
      */
     private function buildWeeklyWorkerReport(User $worker, Carbon $weekStart, Carbon $weekEnd): array
     {
@@ -1109,7 +1213,7 @@ class TaskController extends Controller
     }
 
     /**
-     * Identify manager-side actor.
+     * Check if actor is manager.
      */
     private function isManagerActor(?User $user): bool
     {
@@ -1117,57 +1221,35 @@ class TaskController extends Controller
     }
 
     /**
-     * Best display name for user.
+     * Property label helper.
+     */
+    private function propertyLabel(Task $task): string
+    {
+        return (string) (
+            $task->property?->title
+            ?? $task->property?->name
+            ?? 'No property'
+        );
+    }
+
+    /**
+     * User display helper.
      */
     private function userDisplayName(?User $user): string
     {
         if (!$user) {
-            return 'User';
+            return 'Unknown User';
         }
 
-        $fullName = trim(
-            collect([
+        $name = trim(
+            implode(' ', array_filter([
                 $user->first_name ?? null,
                 $user->last_name ?? null,
-            ])->filter()->implode(' ')
+            ]))
         );
 
-        if ($fullName !== '') {
-            return $fullName;
-        }
-
-        if (filled($user->name ?? null)) {
-            return (string) $user->name;
-        }
-
-        if (filled($user->full_name ?? null)) {
-            return (string) $user->full_name;
-        }
-
-        if (filled($user->email ?? null)) {
-            return (string) $user->email;
-        }
-
-        return 'User #' . $user->id;
-    }
-
-    /**
-     * Best display label for property.
-     */
-    private function propertyLabel(Task $task): ?string
-    {
-        $property = $task->property;
-
-        if (!$property) {
-            return null;
-        }
-
-        foreach (['name', 'title', 'property_name', 'hotel_name', 'label'] as $field) {
-            if (isset($property->{$field}) && filled($property->{$field})) {
-                return (string) $property->{$field};
-            }
-        }
-
-        return $task->property_id ? ('Property #' . $task->property_id) : null;
+        return $name !== ''
+            ? $name
+            : ($user->name ?? $user->email ?? ('User #' . $user->id));
     }
 }
