@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Str;
 
 class TaskUpdateAttachment extends Model
@@ -29,6 +30,11 @@ class TaskUpdateAttachment extends Model
     public function taskUpdate(): BelongsTo
     {
         return $this->belongsTo(TaskUpdate::class);
+    }
+
+    public function rewards(): HasMany
+    {
+        return $this->hasMany(TaskReward::class, 'attachment_id')->latest('created_at')->latest('id');
     }
 
     public function getFileUrlAttribute(): ?string
@@ -77,7 +83,6 @@ class TaskUpdateAttachment extends Model
                 return asset($normalized);
             }
 
-            // filename only => cannot build safe url here
             if (!Str::contains($normalized, '/')) {
                 return null;
             }

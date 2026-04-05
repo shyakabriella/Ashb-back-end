@@ -35,10 +35,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('tasks', 'index');
         Route::post('tasks', 'store');
 
-        // keep special routes BEFORE tasks/{task}
         Route::get('tasks/weekly-report', 'weeklyReport');
         Route::get('my-tasks', 'myTasks');
+
         Route::post('tasks/{task}/assign-workers', 'assignWorkers');
+        Route::post('tasks/{task}/sync-workers', 'syncWorkers');
+
+        Route::get('tasks/{task}/rewards', 'rewards');
+        Route::post('tasks/{task}/reward', 'saveReward');
+        Route::post('tasks/{task}/rewards', 'saveReward');
 
         Route::get('tasks/{task}', 'show');
         Route::put('tasks/{task}', 'update');

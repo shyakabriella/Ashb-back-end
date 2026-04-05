@@ -33,4 +33,9 @@ class TaskUpdate extends Model
     {
         return $this->hasMany(TaskUpdateAttachment::class)->latest();
     }
+
+    public function rewards(): HasMany
+    {
+        return $this->hasMany(TaskReward::class, 'task_update_id')->latest('created_at')->latest('id');
+    }
 }
