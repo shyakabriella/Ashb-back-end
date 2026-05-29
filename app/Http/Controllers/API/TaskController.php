@@ -260,13 +260,26 @@ class TaskController extends Controller
 
     /**
      * Save many tasks for one property.
-     * Only CEO / MD / Chief Market / Admin can create tasks.
+     *
+     * Managers can create tasks and assign employee/intern workers.
+     * Employees/interns can create their own tasks, but those tasks are
+     * automatically assigned to the logged-in user only.
      */
     public function store(Request $request): JsonResponse
     {
         $user = $request->user();
 
-        if (!$this->canManageTasks($user)) {
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthenticated.',
+            ], 401);
+        }
+
+        $canManageTasks = $this->canManageTasks($user);
+        $isWorker = $this->isWorker($user);
+
+        if (!$canManageTasks && !$isWorker) {
             return response()->json([
                 'success' => false,
                 'message' => 'You are not allowed to create tasks.',
@@ -298,10 +311,22 @@ class TaskController extends Controller
                 ]);
             }
 
-            $this->validateAssignableUserIds($taskData['assigneeIds'] ?? [], "tasks.$index.assigneeIds");
+            if ($canManageTasks) {
+                $this->validateAssignableUserIds(
+                    $taskData['assigneeIds'] ?? [],
+                    "tasks.$index.assigneeIds"
+                );
+            } else {
+                /*
+                 * Normal worker users cannot assign tasks to other people.
+                 * Even if the frontend sends another user ID, we force it
+                 * to the logged-in employee/intern.
+                 */
+                $validated['tasks'][$index]['assigneeIds'] = [(int) $user->id];
+            }
         }
 
-        $createdTasks = DB::transaction(function () use ($validated, $request) {
+        $createdTasks = DB::transaction(function () use ($validated, $request, $user) {
             $saved = [];
 
             foreach ($validated['tasks'] as $taskData) {
@@ -313,7 +338,7 @@ class TaskController extends Controller
                     'start_at' => $taskData['startAt'],
                     'end_at' => $taskData['endAt'],
                     'status' => $taskData['status'],
-                    'created_by' => $request->user()?->id,
+                    'created_by' => $user->id,
                 ]);
 
                 $assigneeIds = collect($taskData['assigneeIds'] ?? [])
@@ -327,7 +352,7 @@ class TaskController extends Controller
 
                     foreach ($assigneeIds as $userId) {
                         $attachData[$userId] = [
-                            'assigned_by' => $request->user()?->id,
+                            'assigned_by' => $user->id,
                             'assigned_at' => now(),
                         ];
                     }
@@ -793,7 +818,7 @@ class TaskController extends Controller
 
             foreach ($newWorkerIds as $userId) {
                 $attachData[$userId] = [
-                    'assigned_by' => $request->user()?->id,
+                    'assigned_by' => $user->id,
                     'assigned_at' => now(),
                 ];
             }
@@ -853,7 +878,7 @@ class TaskController extends Controller
 
             foreach ($newWorkerIds as $userId) {
                 $attachData[$userId] = [
-                    'assigned_by' => $request->user()?->id,
+                    'assigned_by' => $user->id,
                     'assigned_at' => now(),
                 ];
             }
