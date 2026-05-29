@@ -18,10 +18,10 @@ class Profile extends Model
     ];
 
     /**
-     * Profile belongs to a user.
+     * Profile belongs to one user.
      */
     public function user(): BelongsTo
     {
-        return $this->belongsTo(User::class);
+        return $this->belongsTo(User::class, 'user_id', 'id');
     }
 }
