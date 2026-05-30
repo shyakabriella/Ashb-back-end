@@ -8,6 +8,7 @@ use App\Http\Controllers\API\RegisterController;
 use App\Http\Controllers\API\TaskController;
 use App\Http\Controllers\API\ContractController;
 use App\Http\Controllers\API\ContactMessageController;
+use App\Http\Controllers\API\SupportAiController;
 
 /*
 |--------------------------------------------------------------------------
@@ -28,6 +29,14 @@ Route::controller(RegisterController::class)->group(function () {
 | This route is public because website visitors must be able to send messages.
 */
 Route::post('contact-messages', [ContactMessageController::class, 'store']);
+
+/*
+|--------------------------------------------------------------------------
+| Public Support AI Chatbot route
+|--------------------------------------------------------------------------
+| Website visitors can ask the chatbot questions without logging in.
+*/
+Route::post('support-ai/chat', [SupportAiController::class, 'chat']);
 
 
 /*
@@ -99,6 +108,31 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::patch('contact-messages/{contactMessage}/read', 'markAsRead');
         Route::patch('contact-messages/{contactMessage}/replied', 'markAsReplied');
         Route::delete('contact-messages/{contactMessage}', 'destroy');
+    });
+
+    /*
+    |--------------------------------------------------------------------------
+    | Support AI Knowledge / Training Management
+    |--------------------------------------------------------------------------
+    | Admin can train the chatbot from dashboard.
+    */
+    Route::controller(SupportAiController::class)->group(function () {
+        Route::get('support-ai/knowledge', 'indexKnowledge');
+        Route::post('support-ai/knowledge', 'storeKnowledge');
+        Route::get('support-ai/knowledge/{knowledge}', 'showKnowledge');
+        Route::put('support-ai/knowledge/{knowledge}', 'updateKnowledge');
+        Route::patch('support-ai/knowledge/{knowledge}', 'updateKnowledge');
+        Route::delete('support-ai/knowledge/{knowledge}', 'destroyKnowledge');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Support AI Chat Sessions
+        |--------------------------------------------------------------------------
+        | Admin can review chatbot conversations.
+        */
+        Route::get('support-ai/sessions', 'sessions');
+        Route::get('support-ai/sessions/{session}', 'sessionMessages');
+        Route::patch('support-ai/sessions/{session}/close', 'closeSession');
     });
 
     /*
