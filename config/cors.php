@@ -16,6 +16,11 @@ return [
         'https://www.d.ashbhub.com',
         'http://d.ashbhub.com',
         'http://www.d.ashbhub.com',
+
+        'https://ashbhub.com',
+        'https://www.ashbhub.com',
+        'http://ashbhub.com',
+        'http://www.ashbhub.com',
     ],
 
     'allowed_origins_patterns' => [
