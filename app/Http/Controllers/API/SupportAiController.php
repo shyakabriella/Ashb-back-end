@@ -340,20 +340,18 @@ class SupportAiController extends Controller
     {
         /*
          |--------------------------------------------------------------------------
-         | Step 1: Search your own knowledge base first
+         | Step 1: Search database FAQ / knowledge table first
          |--------------------------------------------------------------------------
          */
         $knowledgeResult = $this->findBestKnowledgeAnswer($question);
 
         /*
          |--------------------------------------------------------------------------
-         | Step 2: Ask Gemini
+         | Step 2: Ask Gemini using:
+         | - ASHBHUB markdown business brain
+         | - database knowledge records
+         | - recent chat conversation
          |--------------------------------------------------------------------------
-         | Gemini receives:
-         | - customer question
-         | - recent chat messages
-         | - your support knowledge base
-         | - closest matched knowledge answer
          */
         $geminiAnswer = null;
 
@@ -379,7 +377,7 @@ class SupportAiController extends Controller
 
         /*
          |--------------------------------------------------------------------------
-         | Step 4: If Gemini fails, use knowledge answer
+         | Step 4: If Gemini fails, use database knowledge answer
          |--------------------------------------------------------------------------
          */
         if ($knowledgeResult['answer']) {
@@ -427,26 +425,31 @@ class SupportAiController extends Controller
             $maxOutputTokens = (int) config('services.gemini.max_output_tokens', 800);
 
             $recentMessages = $this->getRecentConversationText($session);
+            $businessKnowledge = $this->getBusinessKnowledgeText();
             $knowledgeText = $this->getKnowledgeBaseText();
+
             $matchedText = $knowledgeResult['answer']
-                ? "Closest matched company answer:\n{$knowledgeResult['answer']}"
-                : "No close company answer was matched.";
+                ? "Closest matched database FAQ answer:\n{$knowledgeResult['answer']}"
+                : "No close database FAQ answer was matched.";
 
             $prompt = <<<PROMPT
-You are AshBHub customer support AI.
+You are ASHBHUB customer support AI.
 
 Company:
-AshBHub supports hotels, lodges, apartments, safaris, travel businesses, hotel websites, direct booking engines, OTA/channel management guidance, PMS support, digital marketing, SEO, and hospitality technology.
+ASHBHUB / African Safari & Hotel Booking Hub helps hotels, apartments, lodges, resorts, B&Bs, Airbnbs, safaris, and travel businesses grow online.
 
-Important rules:
+Important behavior rules:
 1. Answer in simple and clear English.
 2. Be warm, professional, and helpful.
-3. Answer only about AshBHub, hotels, safaris, travel business, websites, booking, marketing, and support.
-4. Do not invent prices, contracts, guarantees, phone numbers, or emails.
-5. If the customer asks for price, explain that pricing depends on the service and ask them to share their hotel/company details.
-6. If the question needs a human, say the AshBHub team can follow up.
-7. Keep the answer short: 2 to 5 sentences.
-8. Do not say you are Google Gemini. Say you are AshBHub assistant.
+3. Use the ASHBHUB full business knowledge markdown as the main source of truth.
+4. Use the database FAQ knowledge only as extra supporting information.
+5. Answer only about ASHBHUB, hotels, safaris, travel businesses, websites, booking engines, OTA visibility, channel management, PMS, digital marketing, pricing, and support.
+6. Do not invent services, prices, contracts, guarantees, phone numbers, or emails.
+7. If the customer asks about pricing, use the official pricing from the markdown.
+8. If the question needs custom support, ask the customer to share hotel/company name, email, phone, and what service they need.
+9. Keep answers short: 2 to 5 sentences.
+10. Do not say you are Google Gemini. Say you are ASHBHUB assistant.
+11. If the user asks something outside ASHBHUB services, politely guide them back to ASHBHUB support.
 
 Visitor details:
 Name: {$session->visitor_name}
@@ -456,7 +459,10 @@ Hotel/Company: {$session->visitor_hotel}
 Recent conversation:
 {$recentMessages}
 
-AshBHub knowledge base:
+ASHBHUB full business knowledge markdown:
+{$businessKnowledge}
+
+Extra database FAQ knowledge:
 {$knowledgeText}
 
 {$matchedText}
@@ -584,6 +590,31 @@ PROMPT;
             ->implode("\n");
     }
 
+    private function getBusinessKnowledgeText(): string
+    {
+        $businessKnowledgePath = resource_path('ai/ashbhub-business-knowledge.md');
+
+        if (!file_exists($businessKnowledgePath)) {
+            Log::warning('ASHBHUB business knowledge markdown file not found', [
+                'path' => $businessKnowledgePath,
+            ]);
+
+            return 'ASHBHUB business knowledge file not found.';
+        }
+
+        $content = file_get_contents($businessKnowledgePath);
+
+        if (!$content || trim($content) === '') {
+            Log::warning('ASHBHUB business knowledge markdown file is empty', [
+                'path' => $businessKnowledgePath,
+            ]);
+
+            return 'ASHBHUB business knowledge file is empty.';
+        }
+
+        return trim($content);
+    }
+
     private function getKnowledgeBaseText(): string
     {
         $items = SupportAiKnowledge::query()
@@ -593,7 +624,7 @@ PROMPT;
             ->get();
 
         if ($items->isEmpty()) {
-            return 'No knowledge base records found.';
+            return 'No database FAQ knowledge records found.';
         }
 
         return $items
@@ -777,7 +808,7 @@ PROMPT;
 
     private function fallbackAnswer(): string
     {
-        return 'Thank you for your question. AshBHub supports hotels, safaris, travel businesses, hotel websites, booking tools, and digital marketing. This question may need human support, so please send your contact details and our team will follow up.';
+        return 'Thank you for your question. ASHBHUB supports hotels, safaris, travel businesses, hotel websites, booking tools, OTA visibility, PMS setup, and digital marketing. This question may need human support, so please send your contact details and our team will follow up.';
     }
 
     private function getSuggestions(): array
@@ -795,7 +826,7 @@ PROMPT;
         }
 
         return [
-            'What is AshBHub?',
+            'What is ASHBHUB?',
             'Do you build hotel websites?',
             'Do you support booking engine?',
             'Do you help with digital marketing?',
