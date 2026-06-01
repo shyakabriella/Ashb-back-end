@@ -909,7 +909,7 @@ PROMPT;
 
     private function fallbackAnswer(): string
     {
-        return 'Thank you for your question. This may need human support. Please share your hotel/company name, email, phone number, and what service you need. Our ASHBHUB team will follow up.';
+        return 'Human support recommended. Please click “Talk to human support” below.';
     }
 
     private function outOfScopeAnswer(): string
