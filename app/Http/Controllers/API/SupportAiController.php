@@ -340,12 +340,38 @@ class SupportAiController extends Controller
 
     private function resolveAnswer(string $question, SupportAiChatSession $session): array
     {
+        /*
+         |--------------------------------------------------------------------------
+         | 1. Greeting detection
+         |--------------------------------------------------------------------------
+         | If user only says hello, reply like a real assistant.
+         |--------------------------------------------------------------------------
+         */
+        if ($this->isGreetingMessage($question)) {
+            return [
+                'answer' => $this->greetingAnswer(),
+                'matched_knowledge_id' => null,
+                'matched_title' => null,
+                'score' => 10,
+                'source' => 'greeting',
+                'requires_human' => false,
+                'is_in_scope' => true,
+            ];
+        }
+
+        /*
+         |--------------------------------------------------------------------------
+         | 2. Search database knowledge and local scope
+         |--------------------------------------------------------------------------
+         */
         $knowledgeResult = $this->findBestKnowledgeAnswer($question);
         $isLocalScope = $this->isProbablyAshbhubQuestion($question) || !empty($knowledgeResult['answer']);
 
         /*
          |--------------------------------------------------------------------------
-         | Only truly unrelated/general questions go to human support.
+         | 3. Outside/general questions
+         |--------------------------------------------------------------------------
+         | Only unrelated questions should go to human support.
          |--------------------------------------------------------------------------
          */
         if (!$isLocalScope) {
@@ -362,7 +388,7 @@ class SupportAiController extends Controller
 
         /*
          |--------------------------------------------------------------------------
-         | Ask Gemini first for ASHBHUB-related questions.
+         | 4. Ask Gemini for ASHBHUB-related question
          |--------------------------------------------------------------------------
          */
         $geminiAnswer = null;
@@ -373,8 +399,7 @@ class SupportAiController extends Controller
 
         /*
          |--------------------------------------------------------------------------
-         | Use Gemini if it gives a helpful business answer.
-         | If Gemini wrongly says "human support recommended", ignore it.
+         | 5. Use Gemini answer if helpful
          |--------------------------------------------------------------------------
          */
         if ($geminiAnswer && !$this->isHumanSupportOnlyAnswer($geminiAnswer)) {
@@ -391,7 +416,7 @@ class SupportAiController extends Controller
 
         /*
          |--------------------------------------------------------------------------
-         | If Gemini fails, use database answer.
+         | 6. Use database answer if available
          |--------------------------------------------------------------------------
          */
         if ($knowledgeResult['answer']) {
@@ -408,8 +433,7 @@ class SupportAiController extends Controller
 
         /*
          |--------------------------------------------------------------------------
-         | Final ASHBHUB local fallback.
-         | This prevents normal ASHBHUB questions from becoming human support.
+         | 7. Final ASHBHUB local answer
          |--------------------------------------------------------------------------
          */
         return [
@@ -438,7 +462,7 @@ class SupportAiController extends Controller
         try {
             $apiKey = config('services.gemini.api_key');
             $model = config('services.gemini.model', 'gemini-2.5-flash');
-            $temperature = (float) config('services.gemini.temperature', 0.3);
+            $temperature = (float) config('services.gemini.temperature', 0.4);
             $maxOutputTokens = (int) config('services.gemini.max_output_tokens', 800);
 
             $recentMessages = $this->getRecentConversationText($session);
@@ -452,24 +476,30 @@ class SupportAiController extends Controller
             $prompt = <<<PROMPT
 You are ASHBHUB customer support AI.
 
+Your job:
+Understand the customer's intent first, then answer naturally and helpfully using ASHBHUB business knowledge.
+
 Main instruction:
 Use only the ASHBHUB business knowledge below to answer ASHBHUB-related questions.
 Answer normally when the question is about ASHBHUB, hotels, lodges, apartments, resorts, Airbnbs, safaris, travel businesses, hotel websites, OTA visibility, channel management, PMS, booking engine, digital marketing, packages, pricing, setup fees, commission model, contact, requirements, onboarding, or support.
 
-Very important:
-If the user asks "requirements", "what is required", "what do I need", "how to start", "get started", "work with ASHBHUB", or "work with them", this is an ASHBHUB onboarding question. Answer with the required customer/property information.
+Conversation behavior:
+- If the user only greets you, reply warmly and ask how you can help. Do not give the full company description.
+- If the user asks about requirements, onboarding, getting started, or working with ASHBHUB, answer with the customer/property information needed.
+- If the user asks "what do you do" or "what services do you offer", summarize ASHBHUB services.
+- If the user asks pricing, answer with official USD pricing from the knowledge file.
+- If the user asks for custom quotation, ask for property name, location, number of rooms/units, phone/email, and service needed.
+- If the question is truly unrelated to ASHBHUB business support, answer exactly: Human support recommended. Please click “Talk to human support” below.
 
-Rules:
+Style rules:
 1. Use simple and clear English.
 2. Be warm, professional, and helpful.
 3. Keep the answer short: 2 to 5 sentences.
 4. Do not say you are Google Gemini.
 5. Do not invent prices, services, guarantees, phone numbers, or emails.
-6. If the user asks pricing, use official USD pricing from the knowledge file.
-7. If a custom quote is needed, ask for property name, location, number of rooms, phone/email, and service needed.
-8. If the question is truly unrelated to ASHBHUB business support, answer exactly: Human support recommended. Please click “Talk to human support” below.
+6. Do not over-answer a simple greeting.
 
-Useful answer for onboarding / requirements:
+Useful onboarding answer:
 To work with ASHBHUB, a customer should provide property name, property type, location, contact person, phone number, email address, number of rooms or units, current website if available, current OTA links if available, services needed, and preferred package.
 
 Visitor details:
@@ -767,6 +797,28 @@ PROMPT;
         ];
     }
 
+    private function isGreetingMessage(string $question): bool
+    {
+        $text = $this->normalizeText($question);
+
+        $greetings = [
+            'hi',
+            'hello',
+            'hey',
+            'good morning',
+            'good afternoon',
+            'good evening',
+            'muraho',
+        ];
+
+        return in_array($text, $greetings, true);
+    }
+
+    private function greetingAnswer(): string
+    {
+        return 'Hello 👋 Welcome to ASHBHUB support. How can I help you today? You can ask about hotel websites, OTA listing, PMS setup, booking engine, pricing, digital marketing, or how to work with ASHBHUB.';
+    }
+
     private function isProbablyAshbhubQuestion(string $question): bool
     {
         $text = $this->normalizeText($question);
@@ -776,13 +828,6 @@ PROMPT;
             'ashb',
             'african safari',
             'hotel booking hub',
-
-            'hi',
-            'hello',
-            'hey',
-            'good morning',
-            'good afternoon',
-            'good evening',
 
             'requirement',
             'requirements',
