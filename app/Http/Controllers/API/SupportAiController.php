@@ -8,6 +8,8 @@ use App\Models\SupportAiChatSession;
 use App\Models\SupportAiKnowledge;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 
@@ -48,7 +50,7 @@ class SupportAiController extends Controller
             ],
         ]);
 
-        $aiResult = $this->resolveAnswer($request->message);
+        $aiResult = $this->resolveAnswer($request->message, $session);
 
         $botMessage = SupportAiChatMessage::create([
             'support_ai_chat_session_id' => $session->id,
@@ -58,11 +60,16 @@ class SupportAiController extends Controller
             'metadata' => [
                 'score' => $aiResult['score'],
                 'matched_title' => $aiResult['matched_title'],
+                'source' => $aiResult['source'],
+                'requires_human' => $aiResult['requires_human'],
             ],
         ]);
 
         $session->update([
             'last_message_at' => now(),
+            'status' => $aiResult['requires_human']
+                ? 'transferred_to_human'
+                : $session->status,
         ]);
 
         return response()->json([
@@ -76,6 +83,8 @@ class SupportAiController extends Controller
                 'matched_knowledge_id' => $aiResult['matched_knowledge_id'],
                 'matched_title' => $aiResult['matched_title'],
                 'score' => $aiResult['score'],
+                'source' => $aiResult['source'],
+                'requires_human' => $aiResult['requires_human'],
                 'suggestions' => $this->getSuggestions(),
             ],
         ]);
@@ -314,7 +323,67 @@ class SupportAiController extends Controller
         ]);
     }
 
-    private function resolveAnswer(string $question): array
+    private function resolveAnswer(string $question, SupportAiChatSession $session): array
+    {
+        $knowledgeResult = $this->findBestKnowledgeAnswer($question);
+
+        $hasGoodKnowledgeMatch =
+            $knowledgeResult['matched_knowledge_id'] !== null &&
+            $knowledgeResult['score'] >= 8;
+
+        /*
+         | If the knowledge base has a strong answer, return it directly.
+         | This saves Gemini cost and keeps official company answers stable.
+         */
+        if ($hasGoodKnowledgeMatch) {
+            return [
+                'answer' => $knowledgeResult['answer'],
+                'matched_knowledge_id' => $knowledgeResult['matched_knowledge_id'],
+                'matched_title' => $knowledgeResult['matched_title'],
+                'score' => $knowledgeResult['score'],
+                'source' => 'knowledge_base',
+                'requires_human' => false,
+            ];
+        }
+
+        /*
+         | If Gemini is disabled or API key is missing, use fallback.
+         */
+        if (!config('services.gemini.use_ai') || !config('services.gemini.api_key')) {
+            return [
+                'answer' => $knowledgeResult['answer'] ?: $this->fallbackAnswer(),
+                'matched_knowledge_id' => $knowledgeResult['matched_knowledge_id'],
+                'matched_title' => $knowledgeResult['matched_title'],
+                'score' => $knowledgeResult['score'],
+                'source' => 'fallback',
+                'requires_human' => true,
+            ];
+        }
+
+        $geminiAnswer = $this->askGemini($question, $session, $knowledgeResult);
+
+        if (!$geminiAnswer) {
+            return [
+                'answer' => $knowledgeResult['answer'] ?: $this->fallbackAnswer(),
+                'matched_knowledge_id' => $knowledgeResult['matched_knowledge_id'],
+                'matched_title' => $knowledgeResult['matched_title'],
+                'score' => $knowledgeResult['score'],
+                'source' => 'fallback',
+                'requires_human' => true,
+            ];
+        }
+
+        return [
+            'answer' => $geminiAnswer,
+            'matched_knowledge_id' => $knowledgeResult['matched_knowledge_id'],
+            'matched_title' => $knowledgeResult['matched_title'],
+            'score' => max($knowledgeResult['score'], 5),
+            'source' => 'gemini',
+            'requires_human' => $knowledgeResult['score'] <= 0,
+        ];
+    }
+
+    private function findBestKnowledgeAnswer(string $question): array
     {
         $knowledgeItems = SupportAiKnowledge::query()
             ->where('is_active', true)
@@ -323,7 +392,7 @@ class SupportAiController extends Controller
 
         if ($knowledgeItems->isEmpty()) {
             return [
-                'answer' => $this->fallbackAnswer(),
+                'answer' => null,
                 'matched_knowledge_id' => null,
                 'matched_title' => null,
                 'score' => 0,
@@ -392,7 +461,7 @@ class SupportAiController extends Controller
 
         if (!$bestItem || $bestScore <= 0) {
             return [
-                'answer' => $this->fallbackAnswer(),
+                'answer' => null,
                 'matched_knowledge_id' => null,
                 'matched_title' => null,
                 'score' => 0,
@@ -405,6 +474,131 @@ class SupportAiController extends Controller
             'matched_title' => $bestItem->title,
             'score' => $bestScore,
         ];
+    }
+
+    private function askGemini(
+        string $question,
+        SupportAiChatSession $session,
+        array $knowledgeResult
+    ): ?string {
+        try {
+            $apiKey = config('services.gemini.api_key');
+            $model = config('services.gemini.model', 'gemini-2.5-flash');
+            $temperature = (float) config('services.gemini.temperature', 0.3);
+            $maxOutputTokens = (int) config('services.gemini.max_output_tokens', 800);
+
+            $recentMessages = SupportAiChatMessage::query()
+                ->where('support_ai_chat_session_id', $session->id)
+                ->latest()
+                ->limit(8)
+                ->get()
+                ->reverse()
+                ->map(function ($message) {
+                    return strtoupper($message->sender) . ': ' . $message->message;
+                })
+                ->implode("\n");
+
+            $activeKnowledge = SupportAiKnowledge::query()
+                ->where('is_active', true)
+                ->orderByDesc('priority')
+                ->limit(15)
+                ->get()
+                ->map(function ($item) {
+                    return "- Question: {$item->question}\n  Answer: {$item->answer}";
+                })
+                ->implode("\n\n");
+
+            $matchedKnowledge = $knowledgeResult['answer']
+                ? "Closest matched company answer:\n{$knowledgeResult['answer']}"
+                : "No strong company answer was matched.";
+
+            $prompt = <<<PROMPT
+You are AshBHub customer support AI.
+
+Company context:
+AshBHub supports hotels, safaris, travel businesses, hotel websites, booking engines, OTA/channel management guidance, PMS support, direct booking support, digital marketing, SEO, and hospitality technology.
+
+Rules:
+1. Answer in simple, clear English.
+2. Be professional, warm, and helpful.
+3. Do not invent prices, contracts, guarantees, or technical promises.
+4. If the question needs human support, say that the AshBHub team can follow up.
+5. If the user asks about something unrelated to AshBHub services, briefly guide them back to AshBHub support.
+6. Keep the answer short, around 2 to 5 sentences.
+
+Visitor details:
+Name: {$session->visitor_name}
+Email: {$session->visitor_email}
+Hotel/Company: {$session->visitor_hotel}
+
+Recent conversation:
+{$recentMessages}
+
+Company knowledge base:
+{$activeKnowledge}
+
+{$matchedKnowledge}
+
+Customer question:
+{$question}
+
+Give the best support answer now.
+PROMPT;
+
+            $url = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent";
+
+            $response = Http::timeout(30)
+                ->retry(2, 500)
+                ->withHeaders([
+                    'Content-Type' => 'application/json',
+                    'x-goog-api-key' => $apiKey,
+                ])
+                ->post($url, [
+                    'contents' => [
+                        [
+                            'role' => 'user',
+                            'parts' => [
+                                [
+                                    'text' => $prompt,
+                                ],
+                            ],
+                        ],
+                    ],
+                    'generationConfig' => [
+                        'temperature' => $temperature,
+                        'maxOutputTokens' => $maxOutputTokens,
+                    ],
+                ]);
+
+            if (!$response->successful()) {
+                Log::warning('Gemini support AI request failed', [
+                    'status' => $response->status(),
+                    'body' => $response->body(),
+                ]);
+
+                return null;
+            }
+
+            $data = $response->json();
+
+            $text = data_get($data, 'candidates.0.content.parts.0.text');
+
+            if (!$text || !is_string($text)) {
+                Log::warning('Gemini support AI returned empty text', [
+                    'response' => $data,
+                ]);
+
+                return null;
+            }
+
+            return trim($text);
+        } catch (\Throwable $e) {
+            Log::error('Gemini support AI exception', [
+                'message' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
     }
 
     private function normalizeKeywords($keywords): array
@@ -470,6 +664,10 @@ class SupportAiController extends Controller
             'it',
             'this',
             'that',
+            'please',
+            'hello',
+            'hi',
+            'hey',
         ];
 
         $words = explode(' ', $text);
@@ -481,7 +679,7 @@ class SupportAiController extends Controller
 
     private function fallbackAnswer(): string
     {
-        return 'Thank you for your question. AshBHub supports hotels, safaris, travel businesses, websites, booking tools, and digital marketing. Please ask about hotel websites, booking engine, pricing, digital marketing, or request live support.';
+        return 'Thank you for your question. AshBHub supports hotels, safaris, travel businesses, websites, booking tools, and digital marketing. Please ask about hotel websites, booking engine, pricing, digital marketing, or request human support.';
     }
 
     private function getSuggestions(): array
