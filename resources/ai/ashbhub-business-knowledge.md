@@ -1,5 +1,7 @@
 # ASHBHUB Business Knowledge Model
 
+> Currency note: All ASHBHUB prices in this knowledge model are listed in USD ($).
+
 > Use this Markdown file as the main business knowledge source for the ASHBHUB / African Safari & Hotel Booking Hub AI support assistant.
 > The assistant should use this information to answer customer questions about ASHBHUB services, pricing, hospitality technology, hotel websites, OTA visibility, channel management, PMS, digital marketing, and support.
 
@@ -304,7 +306,7 @@ ASHBHUB offers monthly subscription packages, optional one-time setup services, 
 
 ### 14.1 Basic Plan
 
-**Price:** 800,000 RWF per month  
+**Price:** $800 per month  
 **Best for:** Small apartments and Airbnbs
 
 Includes:
@@ -323,13 +325,13 @@ Includes:
 
 Use this answer when a customer asks about the entry-level package:
 
-> The Basic Plan is 800,000 RWF per month and is best for small apartments and Airbnbs. It includes website support, setup on key booking platforms, social media setup, basic channel management, monthly reporting, and basic support.
+> The Basic Plan is $800 per month and is best for small apartments and Airbnbs. It includes website support, setup on key booking platforms, social media setup, basic channel management, monthly reporting, and basic support.
 
 ---
 
 ### 14.2 Standard Plan
 
-**Price:** 1,200,000 RWF per month  
+**Price:** $1,200 per month  
 **Best for:** Guesthouses, lodges, and mid-size hotels
 
 Includes everything in Basic, plus:
@@ -341,13 +343,13 @@ Includes everything in Basic, plus:
 
 Use this answer when a customer asks about the mid-level package:
 
-> The Standard Plan is 1,200,000 RWF per month and is good for guesthouses, lodges, and mid-size hotels. It includes everything in the Basic Plan, plus listing on 150+ OTAs, social media management, brand design templates, and SEO/Google visibility optimization.
+> The Standard Plan is $1,200 per month and is good for guesthouses, lodges, and mid-size hotels. It includes everything in the Basic Plan, plus listing on 150+ OTAs, social media management, brand design templates, and SEO/Google visibility optimization.
 
 ---
 
 ### 14.3 Premium Plan
 
-**Price:** 2,000,000 RWF per month  
+**Price:** $2,000 per month  
 **Best for:** Hotels, resorts, and high-demand properties  
 **Position:** Main recommended package
 
@@ -365,7 +367,7 @@ Includes:
 
 Use this answer when a customer asks for the recommended package:
 
-> The Premium Plan is 2,000,000 RWF per month and is our main recommended package for hotels, resorts, and high-demand properties. It includes a full professional website, listing on 450+ OTAs, channel management setup, PMS setup, social media management, review management, digital marketing consultation, priority support, and 24/7 assistance.
+> The Premium Plan is $2,000 per month and is our main recommended package for hotels, resorts, and high-demand properties. It includes a full professional website, listing on 450+ OTAs, channel management setup, PMS setup, social media management, review management, digital marketing consultation, priority support, and 24/7 assistance.
 
 ---
 
@@ -373,7 +375,7 @@ Use this answer when a customer asks for the recommended package:
 
 ASHBHUB also describes a full hotel digital management package.
 
-**Price:** 2,000,000 RWF per month
+**Price:** $2,000 per month
 
 This package includes:
 
@@ -403,7 +405,7 @@ The monthly fee does not include:
 
 Important assistant rule:
 
-When explaining the 2,000,000 RWF package, clearly mention that OTA commissions and PMS subscription fees are not included when relevant.
+When explaining the $2,000 package, clearly mention that OTA commissions and PMS subscription fees are not included when relevant.
 
 ---
 
@@ -413,22 +415,22 @@ ASHBHUB also offers optional one-time setup services.
 
 ### Website Development
 
-**Price range:** 350,000–800,000 RWF  
+**Price range:** 350,000–$800  
 **Depends on:** Website features, complexity, design, and integrations
 
 ### OTA Setup Fee
 
-**Price:** 300,000 RWF  
+**Price:** $300  
 **Includes:** Setup on platforms such as Booking.com, Airbnb, Expedia, Agoda, and related OTAs
 
 ### PMS Integration Fee
 
-**Price:** 450,000 RWF one-time  
+**Price:** $450 one-time  
 **Includes:** Property Management System integration/setup support
 
-### Branding Package
+### Branding PackagePrice
 
-**Price:** 350,000 RWF  
+**Price:** $350  
 **Includes:** Logo support, posters, and design materials
 
 ---
@@ -528,10 +530,10 @@ The assistant should not:
 6. If the user asks about digital marketing, explain social media, content creation, design, ads, review management, branding, and guest engagement.
 
 7. If the user asks about pricing, provide the known plans:
-   - Basic: 800,000 RWF/month
-   - Standard: 1,200,000 RWF/month
-   - Premium: 2,000,000 RWF/month
-   - One-time services: website 350,000–800,000 RWF, OTA setup 300,000 RWF, PMS integration 450,000 RWF, branding 350,000 RWF
+   - Basic: $800/month
+   - Standard: $1,200/month
+   - Premium: $2,000/month
+   - One-time services: website 350,000–$800, OTA setup $300, PMS integration $450, branding $350
    - Commission option: 30% of bookings generated online
 
 8. If the user asks which plan is best, recommend based on property type:
@@ -597,11 +599,11 @@ Yes. ASHBHUB helps hotels turn online visibility into bookings through graphic d
 
 ### Q: How much does ASHBHUB cost?
 
-ASHBHUB has monthly plans and optional setup services. The Basic Plan is 800,000 RWF/month, the Standard Plan is 1,200,000 RWF/month, and the Premium Plan is 2,000,000 RWF/month. One-time setup options include website development from 350,000–800,000 RWF, OTA setup at 300,000 RWF, PMS integration at 450,000 RWF, and branding at 350,000 RWF.
+ASHBHUB has monthly plans and optional setup services. The Basic Plan is $800/month, the Standard Plan is $1,200/month, and the Premium Plan is $2,000/month. One-time setup options include website development from 350,000–$800, OTA setup at $300, PMS integration at $450, and branding at $350.
 
 ### Q: What is included in the Premium Plan?
 
-The Premium Plan is 2,000,000 RWF/month and includes a full professional website, listing on 450+ OTAs, channel management setup, PMS setup, social media management, review management, digital marketing consultation, priority support, and 24/7 assistance.
+The Premium Plan is $2,000/month and includes a full professional website, listing on 450+ OTAs, channel management setup, PMS setup, social media management, review management, digital marketing consultation, priority support, and 24/7 assistance.
 
 ### Q: Are OTA commissions included in your monthly fee?
 
@@ -617,11 +619,11 @@ Yes, ASHBHUB can offer a commission-based model for selected properties. In this
 
 ### Q: Which plan is best for a small apartment or Airbnb?
 
-The Basic Plan is usually best for small apartments and Airbnbs. It costs 800,000 RWF/month and includes website support, setup on main booking platforms, social media setup, basic channel management, monthly reporting, and basic support.
+The Basic Plan is usually best for small apartments and Airbnbs. It costs $800/month and includes website support, setup on main booking platforms, social media setup, basic channel management, monthly reporting, and basic support.
 
 ### Q: Which plan is best for a mid-size hotel or lodge?
 
-The Standard Plan is usually best for guesthouses, lodges, and mid-size hotels. It costs 1,200,000 RWF/month and includes everything in Basic, plus listing on 150+ OTAs, social media management, brand templates, SEO, and Google visibility optimization.
+The Standard Plan is usually best for guesthouses, lodges, and mid-size hotels. It costs $1,200/month and includes everything in Basic, plus listing on 150+ OTAs, social media management, brand templates, SEO, and Google visibility optimization.
 
 ### Q: Which plan do you recommend for hotels and resorts?
 
@@ -664,7 +666,7 @@ Human support message:
 
 ## 25. Short Business Summary for AI Context
 
-ASHBHUB / African Safari & Hotel Booking Hub is a Kigali-based hospitality digital growth company. It helps hotels, apartments, lodges, resorts, B&Bs, Airbnbs, and travel businesses grow online through professional websites, booking engine support, OTA visibility on up to 450+ platforms, channel management, PMS setup, social media management, digital marketing, branding, review management, monthly reporting, and dedicated support. Pricing includes Basic at 800,000 RWF/month, Standard at 1,200,000 RWF/month, Premium at 2,000,000 RWF/month, optional one-time setup fees, and an optional 30% commission model for selected properties.
+ASHBHUB / African Safari & Hotel Booking Hub is a Kigali-based hospitality digital growth company. It helps hotels, apartments, lodges, resorts, B&Bs, Airbnbs, and travel businesses grow online through professional websites, booking engine support, OTA visibility on up to 450+ platforms, channel management, PMS setup, social media management, digital marketing, branding, review management, monthly reporting, and dedicated support. Pricing includes Basic at $800/month, Standard at $1,200/month, Premium at $2,000/month, optional one-time setup fees, and an optional 30% commission model for selected properties.
 
 ---
 
@@ -704,13 +706,13 @@ You can answer about:
 - Human support follow-up
 
 Known pricing:
-- Basic Plan: 800,000 RWF/month
-- Standard Plan: 1,200,000 RWF/month
-- Premium Plan: 2,000,000 RWF/month
-- Website Development: 350,000–800,000 RWF one-time
-- OTA Setup Fee: 300,000 RWF one-time
-- PMS Integration Fee: 450,000 RWF one-time
-- Branding Package: 350,000 RWF one-time
+- Basic Plan: $800/month
+- Standard Plan: $1,200/month
+- Premium Plan: $2,000/month
+- Website Development: 350,000–$800 one-time
+- OTA Setup Fee: $300 one-time
+- PMS Integration Fee: $450 one-time
+- Branding Package: $350 one-time
 - Optional Commission Model: 30% commission on online bookings generated
 
 Important:
@@ -736,11 +738,11 @@ Yes. ASHBHUB helps hotels grow bookings by improving online visibility, building
 
 ### Example 2: Customer asks, “I need a website only.”
 
-Yes, ASHBHUB can help you with a professional hotel website. Website development can range from 350,000 to 800,000 RWF depending on the features, design, booking engine, payment support, and integrations needed.
+Yes, ASHBHUB can help you with a professional hotel website. Website development can range from 350,000 to $800 depending on the features, design, booking engine, payment support, and integrations needed.
 
 ### Example 3: Customer asks, “How much is full management?”
 
-The full hotel digital management package is 2,000,000 RWF per month. It includes website development and maintenance, listing on 450+ OTAs, PMS setup, property optimization, social media management, review management, digital marketing strategy, monthly reports, and 24/7 technical support. OTA commissions and PMS subscription fees are not included.
+The full hotel digital management package is $2,000 per month. It includes website development and maintenance, listing on 450+ OTAs, PMS setup, property optimization, social media management, review management, digital marketing strategy, monthly reports, and 24/7 technical support. OTA commissions and PMS subscription fees are not included.
 
 ### Example 4: Customer asks, “Can I pay by commission?”
 
