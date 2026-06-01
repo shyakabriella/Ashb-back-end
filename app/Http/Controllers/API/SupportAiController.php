@@ -61,6 +61,7 @@ class SupportAiController extends Controller
                 'matched_title' => $aiResult['matched_title'],
                 'source' => $aiResult['source'],
                 'requires_human' => $aiResult['requires_human'],
+                'is_in_scope' => $aiResult['is_in_scope'] ?? true,
             ],
         ]);
 
@@ -86,6 +87,7 @@ class SupportAiController extends Controller
                 'score' => $aiResult['score'],
                 'source' => $aiResult['source'],
                 'requires_human' => $aiResult['requires_human'],
+                'is_in_scope' => $aiResult['is_in_scope'] ?? true,
 
                 'suggestions' => $this->getSuggestions(),
             ],
@@ -338,46 +340,52 @@ class SupportAiController extends Controller
 
     private function resolveAnswer(string $question, SupportAiChatSession $session): array
     {
-        /*
-         |--------------------------------------------------------------------------
-         | Step 1: Search database FAQ / knowledge table first
-         |--------------------------------------------------------------------------
-         */
         $knowledgeResult = $this->findBestKnowledgeAnswer($question);
 
-        /*
-         |--------------------------------------------------------------------------
-         | Step 2: Ask Gemini using:
-         | - ASHBHUB markdown business brain
-         | - database knowledge records
-         | - recent chat conversation
-         |--------------------------------------------------------------------------
-         */
-        $geminiAnswer = null;
+        $geminiResult = null;
 
         if ($this->geminiIsEnabled()) {
-            $geminiAnswer = $this->askGemini($question, $session, $knowledgeResult);
+            $geminiResult = $this->askGemini($question, $session, $knowledgeResult);
         }
 
         /*
          |--------------------------------------------------------------------------
-         | Step 3: If Gemini answers, return Gemini answer
+         | If Gemini says question is outside ASHBHUB knowledge, do NOT answer it.
+         | Recommend human support instead.
          |--------------------------------------------------------------------------
          */
-        if ($geminiAnswer) {
+        if (is_array($geminiResult) && ($geminiResult['is_in_scope'] ?? false) === false) {
             return [
-                'answer' => $geminiAnswer,
-                'matched_knowledge_id' => $knowledgeResult['matched_knowledge_id'],
-                'matched_title' => $knowledgeResult['matched_title'],
-                'score' => max((int) $knowledgeResult['score'], 5),
-                'source' => 'gemini',
-                'requires_human' => false,
+                'answer' => $geminiResult['answer'] ?: $this->outOfScopeAnswer(),
+                'matched_knowledge_id' => null,
+                'matched_title' => null,
+                'score' => 0,
+                'source' => 'out_of_scope',
+                'requires_human' => true,
+                'is_in_scope' => false,
             ];
         }
 
         /*
          |--------------------------------------------------------------------------
-         | Step 4: If Gemini fails, use database knowledge answer
+         | If Gemini gives an in-scope answer, return it.
+         |--------------------------------------------------------------------------
+         */
+        if (is_array($geminiResult) && !empty($geminiResult['answer'])) {
+            return [
+                'answer' => $geminiResult['answer'],
+                'matched_knowledge_id' => $knowledgeResult['matched_knowledge_id'],
+                'matched_title' => $knowledgeResult['matched_title'],
+                'score' => max((int) $knowledgeResult['score'], 5),
+                'source' => 'gemini',
+                'requires_human' => (bool) ($geminiResult['requires_human'] ?? false),
+                'is_in_scope' => true,
+            ];
+        }
+
+        /*
+         |--------------------------------------------------------------------------
+         | If Gemini fails but database FAQ has answer, use database answer.
          |--------------------------------------------------------------------------
          */
         if ($knowledgeResult['answer']) {
@@ -388,12 +396,13 @@ class SupportAiController extends Controller
                 'score' => (int) $knowledgeResult['score'],
                 'source' => 'knowledge_base',
                 'requires_human' => false,
+                'is_in_scope' => true,
             ];
         }
 
         /*
          |--------------------------------------------------------------------------
-         | Step 5: If nothing works, request human support
+         | No answer found.
          |--------------------------------------------------------------------------
          */
         return [
@@ -403,6 +412,7 @@ class SupportAiController extends Controller
             'score' => 0,
             'source' => 'fallback',
             'requires_human' => true,
+            'is_in_scope' => false,
         ];
     }
 
@@ -417,11 +427,11 @@ class SupportAiController extends Controller
         string $question,
         SupportAiChatSession $session,
         array $knowledgeResult
-    ): ?string {
+    ): ?array {
         try {
             $apiKey = config('services.gemini.api_key');
             $model = config('services.gemini.model', 'gemini-2.5-flash');
-            $temperature = (float) config('services.gemini.temperature', 0.3);
+            $temperature = (float) config('services.gemini.temperature', 0.2);
             $maxOutputTokens = (int) config('services.gemini.max_output_tokens', 800);
 
             $recentMessages = $this->getRecentConversationText($session);
@@ -435,21 +445,69 @@ class SupportAiController extends Controller
             $prompt = <<<PROMPT
 You are ASHBHUB customer support AI.
 
-Company:
-ASHBHUB / African Safari & Hotel Booking Hub helps hotels, apartments, lodges, resorts, B&Bs, Airbnbs, safaris, and travel businesses grow online.
+CRITICAL SCOPE RULE:
+You must only answer using the ASHBHUB full business knowledge markdown and extra database FAQ knowledge provided below.
+If the customer asks anything outside this knowledge, even if you know the answer from general knowledge, you must NOT answer it.
+For outside questions, recommend human support.
 
-Important behavior rules:
+Examples of outside questions:
+- General world knowledge
+- Politics
+- School homework
+- Medical questions
+- Legal questions
+- Coding questions
+- Weather
+- News
+- Math unrelated to ASHBHUB pricing
+- Any topic not connected to ASHBHUB, hotels, safaris, travel business, website, OTA visibility, PMS, booking engine, channel management, digital marketing, pricing, or support
+
+Allowed topics:
+- ASHBHUB / African Safari & Hotel Booking Hub
+- Hotels, lodges, apartments, resorts, B&Bs, Airbnbs
+- Safari and travel businesses
+- Hotel website development
+- Direct booking engine
+- OTA listing and 450+ OTAs
+- Booking.com, Airbnb, Expedia, Agoda, Trip.com, Hotels.com, Kayak, Hostelworld, Hotelbeds, TourRadar
+- Channel management
+- PMS / Property Management System
+- Digital marketing
+- Social media management
+- Graphic design and branding
+- Review and reputation management
+- ASHBHUB pricing, packages, setup fees, commission model
+- ASHBHUB contact and onboarding support
+
+Answer rules:
 1. Answer in simple and clear English.
 2. Be warm, professional, and helpful.
-3. Use the ASHBHUB full business knowledge markdown as the main source of truth.
-4. Use the database FAQ knowledge only as extra supporting information.
-5. Answer only about ASHBHUB, hotels, safaris, travel businesses, websites, booking engines, OTA visibility, channel management, PMS, digital marketing, pricing, and support.
-6. Do not invent services, prices, contracts, guarantees, phone numbers, or emails.
-7. If the customer asks about pricing, use the official pricing from the markdown.
-8. If the question needs custom support, ask the customer to share hotel/company name, email, phone, and what service they need.
-9. Keep answers short: 2 to 5 sentences.
-10. Do not say you are Google Gemini. Say you are ASHBHUB assistant.
-11. If the user asks something outside ASHBHUB services, politely guide them back to ASHBHUB support.
+3. Use ASHBHUB markdown as the main source of truth.
+4. Use database FAQ only as extra support.
+5. Do not invent services, prices, guarantees, phone numbers, or emails.
+6. If customer asks pricing, use official pricing from the markdown.
+7. If customer needs custom support, ask for hotel/company name, email, phone, and service needed.
+8. Keep answers short: 2 to 5 sentences.
+9. Do not say you are Google Gemini.
+10. If question is outside ASHBHUB knowledge, set is_in_scope to false and requires_human to true.
+
+Return ONLY valid JSON.
+Do not use markdown.
+Do not add explanation outside JSON.
+
+JSON format:
+{
+  "is_in_scope": true,
+  "requires_human": false,
+  "answer": "Your short answer here"
+}
+
+For outside questions use this JSON:
+{
+  "is_in_scope": false,
+  "requires_human": true,
+  "answer": "This question is outside ASHBHUB business support. Please share your contact details, and our human support team will help you."
+}
 
 Visitor details:
 Name: {$session->visitor_name}
@@ -469,8 +527,6 @@ Extra database FAQ knowledge:
 
 Customer question:
 {$question}
-
-Give the best customer support answer now.
 PROMPT;
 
             $url = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$apiKey}";
@@ -489,6 +545,7 @@ PROMPT;
                 'generationConfig' => [
                     'temperature' => $temperature,
                     'maxOutputTokens' => $maxOutputTokens,
+                    'responseMimeType' => 'application/json',
                 ],
             ];
 
@@ -506,16 +563,16 @@ PROMPT;
             $data = json_decode($response['body'], true);
 
             if (!is_array($data)) {
-                Log::warning('Gemini support AI returned invalid JSON', [
+                Log::warning('Gemini support AI returned invalid JSON body', [
                     'body' => $response['body'],
                 ]);
 
                 return null;
             }
 
-            $text = data_get($data, 'candidates.0.content.parts.0.text');
+            $rawText = data_get($data, 'candidates.0.content.parts.0.text');
 
-            if (!$text || !is_string($text)) {
+            if (!$rawText || !is_string($rawText)) {
                 Log::warning('Gemini support AI returned empty text', [
                     'response' => $data,
                 ]);
@@ -523,7 +580,21 @@ PROMPT;
                 return null;
             }
 
-            return trim($text);
+            $parsed = $this->parseGeminiJsonText($rawText);
+
+            if (!$parsed) {
+                Log::warning('Gemini support AI JSON parse failed', [
+                    'raw_text' => $rawText,
+                ]);
+
+                return null;
+            }
+
+            return [
+                'is_in_scope' => (bool) ($parsed['is_in_scope'] ?? false),
+                'requires_human' => (bool) ($parsed['requires_human'] ?? false),
+                'answer' => trim((string) ($parsed['answer'] ?? '')),
+            ];
         } catch (\Throwable $e) {
             Log::error('Gemini support AI exception', [
                 'message' => $e->getMessage(),
@@ -531,6 +602,36 @@ PROMPT;
 
             return null;
         }
+    }
+
+    private function parseGeminiJsonText(string $rawText): ?array
+    {
+        $text = trim($rawText);
+
+        $text = preg_replace('/^```json\s*/i', '', $text);
+        $text = preg_replace('/^```\s*/i', '', $text);
+        $text = preg_replace('/\s*```$/', '', $text);
+        $text = trim($text);
+
+        $decoded = json_decode($text, true);
+
+        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+            return $decoded;
+        }
+
+        $start = strpos($text, '{');
+        $end = strrpos($text, '}');
+
+        if ($start !== false && $end !== false && $end > $start) {
+            $json = substr($text, $start, $end - $start + 1);
+            $decoded = json_decode($json, true);
+
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        return null;
     }
 
     private function curlJsonPost(string $url, array $payload): array
@@ -808,7 +909,12 @@ PROMPT;
 
     private function fallbackAnswer(): string
     {
-        return 'Thank you for your question. ASHBHUB supports hotels, safaris, travel businesses, hotel websites, booking tools, OTA visibility, PMS setup, and digital marketing. This question may need human support, so please send your contact details and our team will follow up.';
+        return 'Thank you for your question. This may need human support. Please share your hotel/company name, email, phone number, and what service you need. Our ASHBHUB team will follow up.';
+    }
+
+    private function outOfScopeAnswer(): string
+    {
+        return 'This question is outside ASHBHUB business support. Please share your contact details, and our human support team will help you.';
     }
 
     private function getSuggestions(): array
