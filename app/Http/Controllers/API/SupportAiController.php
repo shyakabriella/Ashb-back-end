@@ -341,16 +341,6 @@ class SupportAiController extends Controller
     private function resolveAnswer(string $question, SupportAiChatSession $session): array
     {
         $knowledgeResult = $this->findBestKnowledgeAnswer($question);
-
-        /*
-         |--------------------------------------------------------------------------
-         | Local scope check before Gemini
-         |--------------------------------------------------------------------------
-         | This prevents Gemini from rejecting valid ASHBHUB questions too easily.
-         | If the question is clearly outside ASHBHUB/hotel/safari/booking/marketing,
-         | recommend human support directly.
-         |--------------------------------------------------------------------------
-         */
         $isLocalScope = $this->isProbablyAshbhubQuestion($question) || !empty($knowledgeResult['answer']);
 
         if (!$isLocalScope) {
@@ -365,41 +355,30 @@ class SupportAiController extends Controller
             ];
         }
 
-        $geminiResult = null;
+        $geminiAnswer = null;
 
         if ($this->geminiIsEnabled()) {
-            $geminiResult = $this->askGemini($question, $session, $knowledgeResult);
+            $geminiAnswer = $this->askGemini($question, $session, $knowledgeResult);
         }
 
-        /*
-         |--------------------------------------------------------------------------
-         | If Gemini gives an answer, use it.
-         | Laravel already confirmed the question is related to ASHBHUB.
-         |--------------------------------------------------------------------------
-         */
-        if (is_array($geminiResult) && !empty($geminiResult['answer'])) {
+        if ($geminiAnswer && !$this->isHumanSupportOnlyAnswer($geminiAnswer)) {
             return [
-                'answer' => $geminiResult['answer'],
+                'answer' => $geminiAnswer,
                 'matched_knowledge_id' => $knowledgeResult['matched_knowledge_id'],
                 'matched_title' => $knowledgeResult['matched_title'],
                 'score' => max((int) $knowledgeResult['score'], 5),
                 'source' => 'gemini',
-                'requires_human' => (bool) ($geminiResult['requires_human'] ?? false),
+                'requires_human' => false,
                 'is_in_scope' => true,
             ];
         }
 
-        /*
-         |--------------------------------------------------------------------------
-         | If Gemini fails but database FAQ has answer, use database answer.
-         |--------------------------------------------------------------------------
-         */
         if ($knowledgeResult['answer']) {
             return [
                 'answer' => $knowledgeResult['answer'],
                 'matched_knowledge_id' => $knowledgeResult['matched_knowledge_id'],
                 'matched_title' => $knowledgeResult['matched_title'],
-                'score' => (int) $knowledgeResult['score'],
+                'score' => max((int) $knowledgeResult['score'], 5),
                 'source' => 'knowledge_base',
                 'requires_human' => false,
                 'is_in_scope' => true,
@@ -407,12 +386,12 @@ class SupportAiController extends Controller
         }
 
         return [
-            'answer' => $this->fallbackAnswer(),
+            'answer' => $this->localAshbhubAnswer($question),
             'matched_knowledge_id' => null,
             'matched_title' => null,
-            'score' => 0,
-            'source' => 'fallback',
-            'requires_human' => true,
+            'score' => 5,
+            'source' => 'local_business_fallback',
+            'requires_human' => false,
             'is_in_scope' => true,
         ];
     }
@@ -428,11 +407,11 @@ class SupportAiController extends Controller
         string $question,
         SupportAiChatSession $session,
         array $knowledgeResult
-    ): ?array {
+    ): ?string {
         try {
             $apiKey = config('services.gemini.api_key');
             $model = config('services.gemini.model', 'gemini-2.5-flash');
-            $temperature = (float) config('services.gemini.temperature', 0.2);
+            $temperature = (float) config('services.gemini.temperature', 0.3);
             $maxOutputTokens = (int) config('services.gemini.max_output_tokens', 800);
 
             $recentMessages = $this->getRecentConversationText($session);
@@ -446,57 +425,19 @@ class SupportAiController extends Controller
             $prompt = <<<PROMPT
 You are ASHBHUB customer support AI.
 
-CRITICAL SCOPE RULE:
-You must answer only questions related to ASHBHUB, hotels, accommodation businesses, safaris, travel businesses, hotel websites, OTA visibility, channel management, PMS, booking engines, digital marketing, pricing, packages, setup fees, commission model, contact, and support.
+Use only ASHBHUB business knowledge below to answer.
+Do not answer general knowledge questions.
+If the user asks about ASHBHUB, hotels, accommodation, safaris, travel businesses, hotel websites, OTA visibility, channel management, PMS, booking engine, digital marketing, packages, pricing, setup fees, commission model, contact, or support, answer normally.
 
-If the customer asks a general knowledge question that is not related to ASHBHUB business support, do not answer from general knowledge. Recommend human support.
-
-Allowed topics:
-- ASHBHUB / African Safari & Hotel Booking Hub
-- Hotels, lodges, apartments, resorts, B&Bs, Airbnbs
-- Safari and travel businesses
-- Hotel website development
-- Direct booking engine
-- OTA listing and 450+ OTAs
-- Booking.com, Airbnb, Expedia, Agoda, Trip.com, Hotels.com, Kayak, Hostelworld, Hotelbeds, TourRadar
-- Channel management
-- PMS / Property Management System
-- Digital marketing
-- Social media management
-- Graphic design and branding
-- Review and reputation management
-- ASHBHUB pricing, packages, setup fees, commission model
-- ASHBHUB contact and onboarding support
-
-Answer rules:
-1. Answer in simple and clear English.
+Rules:
+1. Use simple and clear English.
 2. Be warm, professional, and helpful.
-3. Use ASHBHUB markdown as the main source of truth.
-4. Use database FAQ only as extra support.
-5. Do not invent services, prices, guarantees, phone numbers, or emails.
-6. If customer asks pricing, use official pricing from the markdown.
-7. If customer needs custom support, ask for hotel/company name, email, phone, and service needed.
-8. Keep answers short: 2 to 5 sentences.
-9. Do not say you are Google Gemini.
-10. If question is outside ASHBHUB business support, set requires_human to true.
-
-Return ONLY valid JSON.
-Do not use markdown.
-Do not add explanation outside JSON.
-
-JSON format:
-{
-  "is_in_scope": true,
-  "requires_human": false,
-  "answer": "Your short answer here"
-}
-
-For outside questions use this JSON:
-{
-  "is_in_scope": false,
-  "requires_human": true,
-  "answer": "Human support recommended. Please click “Talk to human support” below."
-}
+3. Keep the answer short: 2 to 5 sentences.
+4. Do not say you are Google Gemini.
+5. Do not invent prices, services, guarantees, phone numbers, or emails.
+6. If the user asks pricing, use the official USD pricing from the knowledge file.
+7. If a custom quote is needed, ask for hotel/property name, location, number of rooms, phone/email, and service needed.
+8. If the question is unrelated to ASHBHUB business support, answer exactly: Human support recommended. Please click “Talk to human support” below.
 
 Visitor details:
 Name: {$session->visitor_name}
@@ -525,16 +466,13 @@ PROMPT;
                     [
                         'role' => 'user',
                         'parts' => [
-                            [
-                                'text' => $prompt,
-                            ],
+                            ['text' => $prompt],
                         ],
                     ],
                 ],
                 'generationConfig' => [
                     'temperature' => $temperature,
                     'maxOutputTokens' => $maxOutputTokens,
-                    'responseMimeType' => 'application/json',
                 ],
             ];
 
@@ -559,9 +497,9 @@ PROMPT;
                 return null;
             }
 
-            $rawText = data_get($data, 'candidates.0.content.parts.0.text');
+            $text = data_get($data, 'candidates.0.content.parts.0.text');
 
-            if (!$rawText || !is_string($rawText)) {
+            if (!$text || !is_string($text)) {
                 Log::warning('Gemini support AI returned empty text', [
                     'response' => $data,
                 ]);
@@ -569,21 +507,7 @@ PROMPT;
                 return null;
             }
 
-            $parsed = $this->parseGeminiJsonText($rawText);
-
-            if (!$parsed) {
-                Log::warning('Gemini support AI JSON parse failed', [
-                    'raw_text' => $rawText,
-                ]);
-
-                return null;
-            }
-
-            return [
-                'is_in_scope' => (bool) ($parsed['is_in_scope'] ?? true),
-                'requires_human' => (bool) ($parsed['requires_human'] ?? false),
-                'answer' => trim((string) ($parsed['answer'] ?? '')),
-            ];
+            return trim($text);
         } catch (\Throwable $e) {
             Log::error('Gemini support AI exception', [
                 'message' => $e->getMessage(),
@@ -591,36 +515,6 @@ PROMPT;
 
             return null;
         }
-    }
-
-    private function parseGeminiJsonText(string $rawText): ?array
-    {
-        $text = trim($rawText);
-
-        $text = preg_replace('/^```json\s*/i', '', $text);
-        $text = preg_replace('/^```\s*/i', '', $text);
-        $text = preg_replace('/\s*```$/', '', $text);
-        $text = trim($text);
-
-        $decoded = json_decode($text, true);
-
-        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-            return $decoded;
-        }
-
-        $start = strpos($text, '{');
-        $end = strrpos($text, '}');
-
-        if ($start !== false && $end !== false && $end > $start) {
-            $json = substr($text, $start, $end - $start + 1);
-            $decoded = json_decode($json, true);
-
-            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-                return $decoded;
-            }
-        }
-
-        return null;
     }
 
     private function curlJsonPost(string $url, array $payload): array
@@ -830,6 +724,33 @@ PROMPT;
             'african safari',
             'hotel booking hub',
 
+            'hi',
+            'hello',
+            'hey',
+            'good morning',
+            'good afternoon',
+            'good evening',
+
+            'service',
+            'services',
+            'offer',
+            'offers',
+            'offering',
+            'what do you do',
+            'what you do',
+            'about you',
+            'about ashbhub',
+            'business',
+            'company',
+            'help',
+            'help me',
+            'manage',
+            'management',
+            'grow',
+            'growth',
+            'online',
+            'visibility',
+
             'hotel',
             'hotels',
             'apartment',
@@ -925,6 +846,77 @@ PROMPT;
         }
 
         return false;
+    }
+
+    private function isHumanSupportOnlyAnswer(string $answer): bool
+    {
+        $text = $this->normalizeText($answer);
+
+        return str_contains($text, 'human support recommended')
+            || str_contains($text, 'talk to human support below');
+    }
+
+    private function localAshbhubAnswer(string $question): string
+    {
+        $text = $this->normalizeText($question);
+
+        if (
+            str_contains($text, 'service') ||
+            str_contains($text, 'offer') ||
+            str_contains($text, 'what do you do') ||
+            str_contains($text, 'what you do') ||
+            str_contains($text, 'help')
+        ) {
+            return 'ASHBHUB helps hotels, apartments, lodges, resorts, Airbnbs, and safari/travel businesses grow online. We provide hotel websites, booking engine support, OTA visibility, channel management, PMS setup, social media management, digital marketing, branding, review management, reporting, and local support.';
+        }
+
+        if (
+            str_contains($text, 'price') ||
+            str_contains($text, 'pricing') ||
+            str_contains($text, 'cost') ||
+            str_contains($text, 'package') ||
+            str_contains($text, 'plan')
+        ) {
+            return 'ASHBHUB has monthly plans in USD: Basic at $800/month, Standard at $1,200/month, and Premium at $2,000/month. One-time options include website development from $350–$800, OTA setup at $300, PMS integration at $450, and branding at $350.';
+        }
+
+        if (
+            str_contains($text, 'website') ||
+            str_contains($text, 'web design') ||
+            str_contains($text, 'online presence')
+        ) {
+            return 'Yes. ASHBHUB builds professional hotel websites with room pages, gallery, contact forms, booking engine support, SEO structure, online payment support, and mobile-friendly design.';
+        }
+
+        if (
+            str_contains($text, 'ota') ||
+            str_contains($text, 'booking com') ||
+            str_contains($text, 'booking.com') ||
+            str_contains($text, 'expedia') ||
+            str_contains($text, 'agoda')
+        ) {
+            return 'Yes. ASHBHUB helps properties get listed and optimized on major OTAs such as Booking.com, Airbnb, Expedia, Agoda, Trip.com, Hotels.com, Tripadvisor, Trivago, and up to 450+ platforms depending on the package.';
+        }
+
+        if (
+            str_contains($text, 'pms') ||
+            str_contains($text, 'property management') ||
+            str_contains($text, 'front desk')
+        ) {
+            return 'Yes. ASHBHUB supports PMS setup for front desk operations, reservations, check-in/check-out, billing, guest messages, room availability, direct booking, and performance reports.';
+        }
+
+        if (
+            str_contains($text, 'marketing') ||
+            str_contains($text, 'social media') ||
+            str_contains($text, 'facebook') ||
+            str_contains($text, 'instagram') ||
+            str_contains($text, 'tiktok')
+        ) {
+            return 'Yes. ASHBHUB helps with digital marketing, social media setup and management, monthly content, graphic design, Google/Meta campaign support, review management, branding, and guest engagement.';
+        }
+
+        return 'ASHBHUB is a hospitality digital growth company based in Kigali, Rwanda. We help hotels, lodges, apartments, resorts, Airbnbs, and safari/travel businesses grow online through websites, OTA visibility, channel management, PMS setup, digital marketing, branding, reporting, and support.';
     }
 
     private function normalizeKeywords($keywords): array
