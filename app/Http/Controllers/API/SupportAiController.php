@@ -61,7 +61,7 @@ class SupportAiController extends Controller
                 'matched_title' => $aiResult['matched_title'],
                 'source' => $aiResult['source'],
                 'requires_human' => $aiResult['requires_human'],
-                'is_in_scope' => $aiResult['is_in_scope'] ?? true,
+                'is_in_scope' => $aiResult['is_in_scope'],
             ],
         ]);
 
@@ -87,7 +87,7 @@ class SupportAiController extends Controller
                 'score' => $aiResult['score'],
                 'source' => $aiResult['source'],
                 'requires_human' => $aiResult['requires_human'],
-                'is_in_scope' => $aiResult['is_in_scope'] ?? true,
+                'is_in_scope' => $aiResult['is_in_scope'],
 
                 'suggestions' => $this->getSuggestions(),
             ],
@@ -343,6 +343,11 @@ class SupportAiController extends Controller
         $knowledgeResult = $this->findBestKnowledgeAnswer($question);
         $isLocalScope = $this->isProbablyAshbhubQuestion($question) || !empty($knowledgeResult['answer']);
 
+        /*
+         |--------------------------------------------------------------------------
+         | Only truly unrelated/general questions go to human support.
+         |--------------------------------------------------------------------------
+         */
         if (!$isLocalScope) {
             return [
                 'answer' => $this->outOfScopeAnswer(),
@@ -355,41 +360,63 @@ class SupportAiController extends Controller
             ];
         }
 
+        /*
+         |--------------------------------------------------------------------------
+         | Ask Gemini first for ASHBHUB-related questions.
+         |--------------------------------------------------------------------------
+         */
         $geminiAnswer = null;
 
         if ($this->geminiIsEnabled()) {
             $geminiAnswer = $this->askGemini($question, $session, $knowledgeResult);
         }
 
+        /*
+         |--------------------------------------------------------------------------
+         | Use Gemini if it gives a helpful business answer.
+         | If Gemini wrongly says "human support recommended", ignore it.
+         |--------------------------------------------------------------------------
+         */
         if ($geminiAnswer && !$this->isHumanSupportOnlyAnswer($geminiAnswer)) {
             return [
                 'answer' => $geminiAnswer,
                 'matched_knowledge_id' => $knowledgeResult['matched_knowledge_id'],
                 'matched_title' => $knowledgeResult['matched_title'],
-                'score' => max((int) $knowledgeResult['score'], 5),
+                'score' => max((int) $knowledgeResult['score'], 10),
                 'source' => 'gemini',
                 'requires_human' => false,
                 'is_in_scope' => true,
             ];
         }
 
+        /*
+         |--------------------------------------------------------------------------
+         | If Gemini fails, use database answer.
+         |--------------------------------------------------------------------------
+         */
         if ($knowledgeResult['answer']) {
             return [
                 'answer' => $knowledgeResult['answer'],
                 'matched_knowledge_id' => $knowledgeResult['matched_knowledge_id'],
                 'matched_title' => $knowledgeResult['matched_title'],
-                'score' => max((int) $knowledgeResult['score'], 5),
+                'score' => max((int) $knowledgeResult['score'], 9),
                 'source' => 'knowledge_base',
                 'requires_human' => false,
                 'is_in_scope' => true,
             ];
         }
 
+        /*
+         |--------------------------------------------------------------------------
+         | Final ASHBHUB local fallback.
+         | This prevents normal ASHBHUB questions from becoming human support.
+         |--------------------------------------------------------------------------
+         */
         return [
             'answer' => $this->localAshbhubAnswer($question),
             'matched_knowledge_id' => null,
             'matched_title' => null,
-            'score' => 5,
+            'score' => 8,
             'source' => 'local_business_fallback',
             'requires_human' => false,
             'is_in_scope' => true,
@@ -425,9 +452,12 @@ class SupportAiController extends Controller
             $prompt = <<<PROMPT
 You are ASHBHUB customer support AI.
 
-Use only ASHBHUB business knowledge below to answer.
-Do not answer general knowledge questions.
-If the user asks about ASHBHUB, hotels, accommodation, safaris, travel businesses, hotel websites, OTA visibility, channel management, PMS, booking engine, digital marketing, packages, pricing, setup fees, commission model, contact, or support, answer normally.
+Main instruction:
+Use only the ASHBHUB business knowledge below to answer ASHBHUB-related questions.
+Answer normally when the question is about ASHBHUB, hotels, lodges, apartments, resorts, Airbnbs, safaris, travel businesses, hotel websites, OTA visibility, channel management, PMS, booking engine, digital marketing, packages, pricing, setup fees, commission model, contact, requirements, onboarding, or support.
+
+Very important:
+If the user asks "requirements", "what is required", "what do I need", "how to start", "get started", "work with ASHBHUB", or "work with them", this is an ASHBHUB onboarding question. Answer with the required customer/property information.
 
 Rules:
 1. Use simple and clear English.
@@ -435,9 +465,12 @@ Rules:
 3. Keep the answer short: 2 to 5 sentences.
 4. Do not say you are Google Gemini.
 5. Do not invent prices, services, guarantees, phone numbers, or emails.
-6. If the user asks pricing, use the official USD pricing from the knowledge file.
-7. If a custom quote is needed, ask for hotel/property name, location, number of rooms, phone/email, and service needed.
-8. If the question is unrelated to ASHBHUB business support, answer exactly: Human support recommended. Please click “Talk to human support” below.
+6. If the user asks pricing, use official USD pricing from the knowledge file.
+7. If a custom quote is needed, ask for property name, location, number of rooms, phone/email, and service needed.
+8. If the question is truly unrelated to ASHBHUB business support, answer exactly: Human support recommended. Please click “Talk to human support” below.
+
+Useful answer for onboarding / requirements:
+To work with ASHBHUB, a customer should provide property name, property type, location, contact person, phone number, email address, number of rooms or units, current website if available, current OTA links if available, services needed, and preferred package.
 
 Visitor details:
 Name: {$session->visitor_name}
@@ -507,7 +540,7 @@ PROMPT;
                 return null;
             }
 
-            return trim($text);
+            return $this->cleanGeminiAnswer($text);
         } catch (\Throwable $e) {
             Log::error('Gemini support AI exception', [
                 'message' => $e->getMessage(),
@@ -515,6 +548,26 @@ PROMPT;
 
             return null;
         }
+    }
+
+    private function cleanGeminiAnswer(string $text): string
+    {
+        $text = trim($text);
+
+        $text = preg_replace('/^```json\s*/i', '', $text);
+        $text = preg_replace('/^```\s*/i', '', $text);
+        $text = preg_replace('/\s*```$/', '', $text);
+        $text = trim($text);
+
+        $decoded = json_decode($text, true);
+
+        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+            if (!empty($decoded['answer']) && is_string($decoded['answer'])) {
+                return trim($decoded['answer']);
+            }
+        }
+
+        return $text;
     }
 
     private function curlJsonPost(string $url, array $payload): array
@@ -731,6 +784,33 @@ PROMPT;
             'good afternoon',
             'good evening',
 
+            'requirement',
+            'requirements',
+            'required',
+            'what is required',
+            'what are required',
+            'what do i need',
+            'what we need',
+            'need to work',
+            'needed to work',
+            'work with you',
+            'work with them',
+            'working with you',
+            'start with you',
+            'get started',
+            'getting started',
+            'how to start',
+            'start working',
+            'onboard',
+            'onboarding',
+            'register',
+            'registration',
+            'sign up',
+            'join',
+            'become client',
+            'partner',
+            'partnership',
+
             'service',
             'services',
             'offer',
@@ -825,12 +905,16 @@ PROMPT;
             'pricing',
             'cost',
             'package',
+            'packages',
             'plan',
+            'plans',
             'basic',
             'standard',
             'premium',
             'commission',
             'setup',
+            'fee',
+            'fees',
 
             'support',
             'contact',
@@ -853,12 +937,28 @@ PROMPT;
         $text = $this->normalizeText($answer);
 
         return str_contains($text, 'human support recommended')
-            || str_contains($text, 'talk to human support below');
+            || str_contains($text, 'talk to human support below')
+            || str_contains($text, 'click talk to human support');
     }
 
     private function localAshbhubAnswer(string $question): string
     {
         $text = $this->normalizeText($question);
+
+        if (
+            str_contains($text, 'requirement') ||
+            str_contains($text, 'required') ||
+            str_contains($text, 'what do i need') ||
+            str_contains($text, 'work with you') ||
+            str_contains($text, 'work with them') ||
+            str_contains($text, 'get started') ||
+            str_contains($text, 'start') ||
+            str_contains($text, 'onboard') ||
+            str_contains($text, 'register') ||
+            str_contains($text, 'join')
+        ) {
+            return 'To work with ASHBHUB, a customer should provide the property name, property type, location, contact person, phone number, email address, number of rooms or units, current website if available, current OTA links if available, services needed, and preferred package. This helps ASHBHUB prepare the right setup for website, OTA visibility, PMS, booking engine, digital marketing, or full hotel digital management.';
+        }
 
         if (
             str_contains($text, 'service') ||
@@ -880,6 +980,18 @@ PROMPT;
             return 'ASHBHUB has monthly plans in USD: Basic at $800/month, Standard at $1,200/month, and Premium at $2,000/month. One-time options include website development from $350–$800, OTA setup at $300, PMS integration at $450, and branding at $350.';
         }
 
+        if (str_contains($text, 'basic')) {
+            return 'The ASHBHUB Basic Plan is $800/month. It is best for small apartments, Airbnbs, and small properties starting online, and includes a website, setup on major OTAs, social media setup, basic channel management, monthly reporting, and basic support.';
+        }
+
+        if (str_contains($text, 'standard')) {
+            return 'The ASHBHUB Standard Plan is $1,200/month. It is best for guesthouses, lodges, and mid-size hotels, and includes everything in Basic plus listing on 150+ OTAs, social media management, 8 posts per month, brand design templates, SEO, and Google visibility optimization.';
+        }
+
+        if (str_contains($text, 'premium')) {
+            return 'The ASHBHUB Premium Plan is $2,000/month. It is recommended for hotels, resorts, and high-demand properties, and includes a professional website, listing on 450+ OTAs, channel management setup, PMS setup, social media management, review management, digital marketing consultation, priority support, and 24/7 assistance.';
+        }
+
         if (
             str_contains($text, 'website') ||
             str_contains($text, 'web design') ||
@@ -899,6 +1011,14 @@ PROMPT;
         }
 
         if (
+            str_contains($text, 'channel') ||
+            str_contains($text, 'channel management') ||
+            str_contains($text, 'channel manager')
+        ) {
+            return 'Yes. ASHBHUB supports channel management to sync prices, availability, and bookings across OTA platforms. This helps reduce manual work, avoid overbookings, and improve occupancy.';
+        }
+
+        if (
             str_contains($text, 'pms') ||
             str_contains($text, 'property management') ||
             str_contains($text, 'front desk')
@@ -914,6 +1034,22 @@ PROMPT;
             str_contains($text, 'tiktok')
         ) {
             return 'Yes. ASHBHUB helps with digital marketing, social media setup and management, monthly content, graphic design, Google/Meta campaign support, review management, branding, and guest engagement.';
+        }
+
+        if (
+            str_contains($text, 'commission') ||
+            str_contains($text, 'no fixed monthly')
+        ) {
+            return 'ASHBHUB can also offer a commission-based model for some properties. In this option, the hotel pays 30% commission on online bookings generated, while ASHBHUB manages OTAs, social media, and digital marketing with no fixed monthly fee.';
+        }
+
+        if (
+            str_contains($text, 'contact') ||
+            str_contains($text, 'phone') ||
+            str_contains($text, 'email') ||
+            str_contains($text, 'whatsapp')
+        ) {
+            return 'You can contact ASHBHUB by phone or WhatsApp at +250 788 471 880, or by email at Hotelandsafari@gmail.com. ASHBHUB is based in Kigali, Rwanda.';
         }
 
         return 'ASHBHUB is a hospitality digital growth company based in Kigali, Rwanda. We help hotels, lodges, apartments, resorts, Airbnbs, and safari/travel businesses grow online through websites, OTA visibility, channel management, PMS setup, digital marketing, branding, reporting, and support.';
