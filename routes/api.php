@@ -9,6 +9,7 @@ use App\Http\Controllers\API\TaskController;
 use App\Http\Controllers\API\ContractController;
 use App\Http\Controllers\API\ContactMessageController;
 use App\Http\Controllers\API\SupportAiController;
+use App\Http\Controllers\API\MonthlyPlanPageController;
 
 /*
 |--------------------------------------------------------------------------
@@ -37,6 +38,14 @@ Route::post('contact-messages', [ContactMessageController::class, 'store']);
 | Website visitors can ask the chatbot questions without logging in.
 */
 Route::post('support-ai/chat', [SupportAiController::class, 'chat']);
+
+/*
+|--------------------------------------------------------------------------
+| Public Monthly Plan Page route
+|--------------------------------------------------------------------------
+| Website visitors can view the monthly plans page without logging in.
+*/
+Route::get('monthly-plan-page', [MonthlyPlanPageController::class, 'show']);
 
 
 /*
@@ -94,6 +103,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('properties', PropertyController::class);
     Route::apiResource('clients', ClientController::class);
     Route::apiResource('contracts', ContractController::class);
+
+    /*
+    |--------------------------------------------------------------------------
+    | Monthly Plan Page Management
+    |--------------------------------------------------------------------------
+    | Admin can create or update the monthly plans page content from dashboard.
+    */
+    Route::post('monthly-plan-page', [MonthlyPlanPageController::class, 'storeOrUpdate']);
 
     /*
     |--------------------------------------------------------------------------
