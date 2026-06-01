@@ -342,21 +342,20 @@ class SupportAiController extends Controller
     {
         $knowledgeResult = $this->findBestKnowledgeAnswer($question);
 
-        $geminiResult = null;
-
-        if ($this->geminiIsEnabled()) {
-            $geminiResult = $this->askGemini($question, $session, $knowledgeResult);
-        }
-
         /*
          |--------------------------------------------------------------------------
-         | If Gemini says question is outside ASHBHUB knowledge, do NOT answer it.
-         | Recommend human support instead.
+         | Local scope check before Gemini
+         |--------------------------------------------------------------------------
+         | This prevents Gemini from rejecting valid ASHBHUB questions too easily.
+         | If the question is clearly outside ASHBHUB/hotel/safari/booking/marketing,
+         | recommend human support directly.
          |--------------------------------------------------------------------------
          */
-        if (is_array($geminiResult) && ($geminiResult['is_in_scope'] ?? false) === false) {
+        $isLocalScope = $this->isProbablyAshbhubQuestion($question) || !empty($knowledgeResult['answer']);
+
+        if (!$isLocalScope) {
             return [
-                'answer' => $geminiResult['answer'] ?: $this->outOfScopeAnswer(),
+                'answer' => $this->outOfScopeAnswer(),
                 'matched_knowledge_id' => null,
                 'matched_title' => null,
                 'score' => 0,
@@ -366,9 +365,16 @@ class SupportAiController extends Controller
             ];
         }
 
+        $geminiResult = null;
+
+        if ($this->geminiIsEnabled()) {
+            $geminiResult = $this->askGemini($question, $session, $knowledgeResult);
+        }
+
         /*
          |--------------------------------------------------------------------------
-         | If Gemini gives an in-scope answer, return it.
+         | If Gemini gives an answer, use it.
+         | Laravel already confirmed the question is related to ASHBHUB.
          |--------------------------------------------------------------------------
          */
         if (is_array($geminiResult) && !empty($geminiResult['answer'])) {
@@ -400,11 +406,6 @@ class SupportAiController extends Controller
             ];
         }
 
-        /*
-         |--------------------------------------------------------------------------
-         | No answer found.
-         |--------------------------------------------------------------------------
-         */
         return [
             'answer' => $this->fallbackAnswer(),
             'matched_knowledge_id' => null,
@@ -412,7 +413,7 @@ class SupportAiController extends Controller
             'score' => 0,
             'source' => 'fallback',
             'requires_human' => true,
-            'is_in_scope' => false,
+            'is_in_scope' => true,
         ];
     }
 
@@ -446,21 +447,9 @@ class SupportAiController extends Controller
 You are ASHBHUB customer support AI.
 
 CRITICAL SCOPE RULE:
-You must only answer using the ASHBHUB full business knowledge markdown and extra database FAQ knowledge provided below.
-If the customer asks anything outside this knowledge, even if you know the answer from general knowledge, you must NOT answer it.
-For outside questions, recommend human support.
+You must answer only questions related to ASHBHUB, hotels, accommodation businesses, safaris, travel businesses, hotel websites, OTA visibility, channel management, PMS, booking engines, digital marketing, pricing, packages, setup fees, commission model, contact, and support.
 
-Examples of outside questions:
-- General world knowledge
-- Politics
-- School homework
-- Medical questions
-- Legal questions
-- Coding questions
-- Weather
-- News
-- Math unrelated to ASHBHUB pricing
-- Any topic not connected to ASHBHUB, hotels, safaris, travel business, website, OTA visibility, PMS, booking engine, channel management, digital marketing, pricing, or support
+If the customer asks a general knowledge question that is not related to ASHBHUB business support, do not answer from general knowledge. Recommend human support.
 
 Allowed topics:
 - ASHBHUB / African Safari & Hotel Booking Hub
@@ -489,7 +478,7 @@ Answer rules:
 7. If customer needs custom support, ask for hotel/company name, email, phone, and service needed.
 8. Keep answers short: 2 to 5 sentences.
 9. Do not say you are Google Gemini.
-10. If question is outside ASHBHUB knowledge, set is_in_scope to false and requires_human to true.
+10. If question is outside ASHBHUB business support, set requires_human to true.
 
 Return ONLY valid JSON.
 Do not use markdown.
@@ -506,7 +495,7 @@ For outside questions use this JSON:
 {
   "is_in_scope": false,
   "requires_human": true,
-  "answer": "This question is outside ASHBHUB business support. Please share your contact details, and our human support team will help you."
+  "answer": "Human support recommended. Please click “Talk to human support” below."
 }
 
 Visitor details:
@@ -591,7 +580,7 @@ PROMPT;
             }
 
             return [
-                'is_in_scope' => (bool) ($parsed['is_in_scope'] ?? false),
+                'is_in_scope' => (bool) ($parsed['is_in_scope'] ?? true),
                 'requires_human' => (bool) ($parsed['requires_human'] ?? false),
                 'answer' => trim((string) ($parsed['answer'] ?? '')),
             ];
@@ -831,6 +820,113 @@ PROMPT;
         ];
     }
 
+    private function isProbablyAshbhubQuestion(string $question): bool
+    {
+        $text = $this->normalizeText($question);
+
+        $keywords = [
+            'ashbhub',
+            'ashb',
+            'african safari',
+            'hotel booking hub',
+
+            'hotel',
+            'hotels',
+            'apartment',
+            'apartments',
+            'lodge',
+            'lodges',
+            'resort',
+            'resorts',
+            'bnb',
+            'airbnb',
+            'guesthouse',
+            'guesthouses',
+            'safari',
+            'travel',
+            'tour',
+
+            'booking',
+            'bookings',
+            'reservation',
+            'direct booking',
+            'booking engine',
+
+            'website',
+            'websites',
+            'web design',
+            'online presence',
+
+            'ota',
+            'otas',
+            'booking com',
+            'booking.com',
+            'expedia',
+            'agoda',
+            'trip',
+            'tripadvisor',
+            'trivago',
+            'hotels com',
+            'hotels.com',
+
+            'channel',
+            'channel management',
+            'channel manager',
+
+            'pms',
+            'property management',
+            'front desk',
+            'check in',
+            'check out',
+            'room',
+            'rooms',
+            'availability',
+
+            'digital marketing',
+            'marketing',
+            'social media',
+            'facebook',
+            'instagram',
+            'tiktok',
+            'seo',
+            'google visibility',
+            'google ads',
+            'meta ads',
+
+            'graphic design',
+            'branding',
+            'logo',
+            'review',
+            'reviews',
+            'reputation',
+
+            'price',
+            'pricing',
+            'cost',
+            'package',
+            'plan',
+            'basic',
+            'standard',
+            'premium',
+            'commission',
+            'setup',
+
+            'support',
+            'contact',
+            'phone',
+            'email',
+            'whatsapp',
+        ];
+
+        foreach ($keywords as $keyword) {
+            if (str_contains($text, $this->normalizeText($keyword))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function normalizeKeywords($keywords): array
     {
         if (!$keywords) {
@@ -914,7 +1010,7 @@ PROMPT;
 
     private function outOfScopeAnswer(): string
     {
-        return 'This question is outside ASHBHUB business support. Please share your contact details, and our human support team will help you.';
+        return 'Human support recommended. Please click “Talk to human support” below.';
     }
 
     private function getSuggestions(): array
