@@ -162,6 +162,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('tasks', 'store');
 
         Route::get('tasks/weekly-report', 'weeklyReport');
+        Route::post('tasks/report-cache/rebuild', 'rebuildTaskReportCache');
         Route::get('my-tasks', 'myTasks');
 
         Route::post('tasks/{task}/assign-workers', 'assignWorkers');

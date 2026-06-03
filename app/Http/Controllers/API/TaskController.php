@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Task;
 use App\Models\TaskUpdate;
 use App\Models\TaskUpdateAttachment;
+use App\Models\TaskReportCache;
 use App\Models\User;
 use App\Notifications\TaskAssignedNotification;
 use App\Notifications\TaskStatusChangedNotification;
@@ -217,7 +218,51 @@ class TaskController extends Controller
             ], 401);
         }
 
+        $validated = $request->validate([
+            'from_date' => ['nullable', 'date'],
+            'to_date' => ['nullable', 'date'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+        ]);
+
+        /*
+         * PERFORMANCE RULE:
+         * The tasks list should load ONLY the current month by default.
+         * Old/closed months should be read from the monthly report cache,
+         * not loaded again on this live task listing page.
+         */
+        $fromDate = filled($validated['from_date'] ?? null)
+            ? Carbon::parse($validated['from_date'])->startOfDay()
+            : now()->startOfMonth()->startOfDay();
+
+        $toDate = filled($validated['to_date'] ?? null)
+            ? Carbon::parse($validated['to_date'])->endOfDay()
+            : now()->endOfMonth()->endOfDay();
+
+        if ($toDate->lt($fromDate)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'From date cannot be after To date.',
+            ], 422);
+        }
+
         $query = Task::with($this->taskListRelations());
+
+        /*
+         * Include tasks that belong to the selected month/range:
+         * - tasks starting inside the range
+         * - tasks ending inside the range
+         * - tasks that started before and continue through the range
+         */
+        $query->where(function ($dateQuery) use ($fromDate, $toDate) {
+            $dateQuery
+                ->whereBetween('start_at', [$fromDate, $toDate])
+                ->orWhereBetween('end_at', [$fromDate, $toDate])
+                ->orWhere(function ($overlapQuery) use ($fromDate, $toDate) {
+                    $overlapQuery
+                        ->where('start_at', '<=', $fromDate)
+                        ->where('end_at', '>=', $toDate);
+                });
+        });
 
         if ($this->isWorker($user)) {
             $query->whereHas('workers', function ($q) use ($user) {
@@ -230,14 +275,22 @@ class TaskController extends Controller
             ], 403);
         }
 
+        $perPage = (int) ($validated['per_page'] ?? 20);
+        $perPage = max(1, min($perPage, 100));
+
         $tasks = $query
             ->latest('start_at')
-            ->paginate(20);
+            ->paginate($perPage);
 
         return response()->json([
             'success' => true,
-            'message' => 'Tasks fetched successfully.',
+            'message' => 'Current month tasks fetched successfully.',
             'data' => $tasks,
+            'meta' => [
+                'from_date' => $fromDate->toDateString(),
+                'to_date' => $toDate->toDateString(),
+                'period' => 'current_month_live',
+            ],
         ]);
     }
 
@@ -973,8 +1026,81 @@ class TaskController extends Controller
 
         [$weekStart, $weekEnd] = $this->resolveWeeklyReportRange($request);
 
-        $workers = $this->resolveWeeklyReportSubjects(
+        /*
+         * Performance strategy:
+         * - Current month stays live because tasks can still change.
+         * - Any range fully before the current month is read from task_report_caches.
+         * - If cache is missing, we generate once and save it, so next request is fast.
+         */
+        $canUseCache = $this->canUseTaskReportCache($weekStart, $weekEnd);
+        $forceRefresh = $request->boolean('refresh_cache') && $this->canViewAllWeeklyReports($user);
+        $cacheKey = $this->taskReportCacheKey($user, $requestedUserId, $weekStart, $weekEnd);
+
+        if ($canUseCache && !$forceRefresh) {
+            $cachedPayload = $this->getTaskReportCachePayload($cacheKey);
+
+            if ($cachedPayload !== null) {
+                $cachedPayload['can_view_all'] = $this->canViewAllWeeklyReports($user);
+                $cachedPayload['cache'] = [
+                    'status' => 'hit',
+                    'key' => $cacheKey,
+                ];
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Report loaded from cache successfully.',
+                    'data' => $cachedPayload,
+                ]);
+            }
+        }
+
+        $payload = $this->buildWeeklyReportPayload(
             authUser: $user,
+            requestedUserId: $requestedUserId,
+            weekStart: $weekStart,
+            weekEnd: $weekEnd
+        );
+
+        if ($canUseCache) {
+            $this->storeTaskReportCachePayload(
+                cacheKey: $cacheKey,
+                authUser: $user,
+                requestedUserId: $requestedUserId,
+                weekStart: $weekStart,
+                weekEnd: $weekEnd,
+                payload: $payload
+            );
+
+            $payload['cache'] = [
+                'status' => $forceRefresh ? 'refreshed' : 'created',
+                'key' => $cacheKey,
+            ];
+        } else {
+            $payload['cache'] = [
+                'status' => 'live_current_month',
+                'key' => null,
+            ];
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Report generated successfully.',
+            'data' => $payload,
+        ]);
+    }
+
+
+    /**
+     * Build the same report payload used by the frontend/PDF.
+     */
+    private function buildWeeklyReportPayload(
+        User $authUser,
+        ?int $requestedUserId,
+        Carbon $weekStart,
+        Carbon $weekEnd
+    ): array {
+        $workers = $this->resolveWeeklyReportSubjects(
+            authUser: $authUser,
             requestedUserId: $requestedUserId
         );
 
@@ -982,18 +1108,243 @@ class TaskController extends Controller
             ->map(fn (User $worker) => $this->buildWeeklyWorkerReport($worker, $weekStart, $weekEnd))
             ->values();
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Report generated successfully.',
-            'data' => [
-                'week_start' => $weekStart->toDateString(),
-                'week_end' => $weekEnd->toDateString(),
+        return [
+            'week_start' => $weekStart->toDateString(),
+            'week_end' => $weekEnd->toDateString(),
+            'from_date' => $weekStart->toDateString(),
+            'to_date' => $weekEnd->toDateString(),
+            'generated_at' => now()->toDateTimeString(),
+            'can_view_all' => $this->canViewAllWeeklyReports($authUser),
+            'summary' => $this->buildWeeklyReportSummary($reports),
+            'reports' => $reports,
+        ];
+    }
+
+    /**
+     * Cache only old periods. Current month stays live.
+     */
+    private function canUseTaskReportCache(Carbon $start, Carbon $end): bool
+    {
+        if (!class_exists(TaskReportCache::class)) {
+            return false;
+        }
+
+        if (!Schema::hasTable('task_report_caches')) {
+            return false;
+        }
+
+        $currentMonthStart = now()->startOfMonth()->startOfDay();
+
+        return $end->copy()->endOfDay()->lt($currentMonthStart);
+    }
+
+    /**
+     * Build a stable cache key for old report ranges.
+     */
+    private function taskReportCacheKey(
+        User $authUser,
+        ?int $requestedUserId,
+        Carbon $start,
+        Carbon $end
+    ): string {
+        $scope = $this->taskReportCacheScope($authUser, $requestedUserId);
+
+        return sha1(implode('|', [
+            'task-performance-report',
+            $scope,
+            $start->toDateString(),
+            $end->toDateString(),
+        ]));
+    }
+
+    /**
+     * Determine if this cache is all workers or one worker.
+     */
+    private function taskReportCacheScope(User $authUser, ?int $requestedUserId): string
+    {
+        if ($this->isWorker($authUser)) {
+            return 'user:' . (int) $authUser->id;
+        }
+
+        if ($requestedUserId) {
+            return 'user:' . (int) $requestedUserId;
+        }
+
+        return 'all-workers';
+    }
+
+    /**
+     * Read old report payload from cache table.
+     */
+    private function getTaskReportCachePayload(string $cacheKey): ?array
+    {
+        $cache = TaskReportCache::query()
+            ->where('cache_key', $cacheKey)
+            ->first();
+
+        if (!$cache || !is_array($cache->payload)) {
+            return null;
+        }
+
+        $payload = $cache->payload;
+        $payload['generated_at'] = optional($cache->generated_at)->toDateTimeString()
+            ?: ($payload['generated_at'] ?? now()->toDateTimeString());
+
+        return $payload;
+    }
+
+    /**
+     * Store old report payload so next report load is fast.
+     */
+    private function storeTaskReportCachePayload(
+        string $cacheKey,
+        User $authUser,
+        ?int $requestedUserId,
+        Carbon $weekStart,
+        Carbon $weekEnd,
+        array $payload
+    ): void {
+        $scope = $this->taskReportCacheScope($authUser, $requestedUserId);
+        $cacheUserId = null;
+
+        if (str_starts_with($scope, 'user:')) {
+            $cacheUserId = (int) str_replace('user:', '', $scope);
+        }
+
+        TaskReportCache::query()->updateOrCreate(
+            ['cache_key' => $cacheKey],
+            [
+                'report_type' => 'task_performance',
+                'scope' => $scope,
+                'user_id' => $cacheUserId,
                 'from_date' => $weekStart->toDateString(),
                 'to_date' => $weekEnd->toDateString(),
-                'generated_at' => now()->toDateTimeString(),
-                'can_view_all' => $this->canViewAllWeeklyReports($user),
-                'summary' => $this->buildWeeklyReportSummary($reports),
-                'reports' => $reports,
+                'payload' => $payload,
+                'workers_count' => count((array) data_get($payload, 'reports', [])),
+                'tasks_count' => (int) data_get($payload, 'summary.tasks_total', 0),
+                'generated_at' => now(),
+            ]
+        );
+    }
+
+    /**
+     * Rebuild old monthly report cache.
+     * This is useful after deployment or if old task data was edited manually.
+     * It never caches the current month because current month must stay live.
+     *
+     * Optional body/query:
+     * - from_month=2026-01
+     * - to_month=2026-05
+     */
+    public function rebuildTaskReportCache(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        if (!$this->canViewAllWeeklyReports($user)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You are not allowed to rebuild report cache.',
+            ], 403);
+        }
+
+        if (!Schema::hasTable('task_report_caches')) {
+            return response()->json([
+                'success' => false,
+                'message' => 'task_report_caches table is missing. Please run migration first.',
+            ], 500);
+        }
+
+        $firstTaskDate = Task::query()->min('start_at')
+            ?: Task::query()->min('created_at')
+            ?: now()->subMonth()->toDateString();
+
+        $fromMonth = $request->filled('from_month')
+            ? Carbon::parse((string) $request->input('from_month') . '-01')->startOfMonth()
+            : Carbon::parse($firstTaskDate)->startOfMonth();
+
+        $lastClosedMonth = now()->startOfMonth()->subDay()->startOfMonth();
+
+        $toMonth = $request->filled('to_month')
+            ? Carbon::parse((string) $request->input('to_month') . '-01')->startOfMonth()
+            : $lastClosedMonth->copy();
+
+        if ($toMonth->gt($lastClosedMonth)) {
+            $toMonth = $lastClosedMonth->copy();
+        }
+
+        if ($toMonth->lt($fromMonth)) {
+            return response()->json([
+                'success' => true,
+                'message' => 'No closed month found to cache.',
+                'data' => [
+                    'months_cached' => 0,
+                    'reports_cached' => 0,
+                ],
+            ]);
+        }
+
+        $workers = $this->resolveWeeklyReportSubjects(authUser: $user, requestedUserId: null);
+        $monthsCached = 0;
+        $reportsCached = 0;
+        $month = $fromMonth->copy();
+
+        while ($month->lte($toMonth)) {
+            $monthStart = $month->copy()->startOfMonth()->startOfDay();
+            $monthEnd = $month->copy()->endOfMonth()->endOfDay();
+
+            // Cache all workers report.
+            $allWorkersPayload = $this->buildWeeklyReportPayload(
+                authUser: $user,
+                requestedUserId: null,
+                weekStart: $monthStart,
+                weekEnd: $monthEnd
+            );
+
+            $this->storeTaskReportCachePayload(
+                cacheKey: $this->taskReportCacheKey($user, null, $monthStart, $monthEnd),
+                authUser: $user,
+                requestedUserId: null,
+                weekStart: $monthStart,
+                weekEnd: $monthEnd,
+                payload: $allWorkersPayload
+            );
+
+            $reportsCached++;
+
+            // Cache one report per employee/intern so employee old reports are also fast.
+            foreach ($workers as $worker) {
+                $workerPayload = $this->buildWeeklyReportPayload(
+                    authUser: $user,
+                    requestedUserId: (int) $worker->id,
+                    weekStart: $monthStart,
+                    weekEnd: $monthEnd
+                );
+
+                $this->storeTaskReportCachePayload(
+                    cacheKey: $this->taskReportCacheKey($user, (int) $worker->id, $monthStart, $monthEnd),
+                    authUser: $user,
+                    requestedUserId: (int) $worker->id,
+                    weekStart: $monthStart,
+                    weekEnd: $monthEnd,
+                    payload: $workerPayload
+                );
+
+                $reportsCached++;
+            }
+
+            $monthsCached++;
+            $month->addMonth();
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Old monthly report cache rebuilt successfully.',
+            'data' => [
+                'months_cached' => $monthsCached,
+                'reports_cached' => $reportsCached,
+                'workers_cached' => $workers->count(),
+                'from_month' => $fromMonth->format('Y-m'),
+                'to_month' => $toMonth->format('Y-m'),
             ],
         ]);
     }
@@ -1507,6 +1858,28 @@ class TaskController extends Controller
     $tasks = Task::with($relations)
         ->whereHas('workers', function ($query) use ($worker) {
             $query->where('users.id', $worker->id);
+        })
+        ->where(function ($query) use ($weekStart, $weekEnd) {
+            /*
+             * Do not load every task from all years.
+             * Only load tasks that touched the selected report period.
+             */
+            $query
+                ->whereBetween('tasks.start_at', [$weekStart, $weekEnd])
+                ->orWhereBetween('tasks.end_at', [$weekStart, $weekEnd])
+                ->orWhereBetween('tasks.created_at', [$weekStart, $weekEnd])
+                ->orWhereBetween('tasks.updated_at', [$weekStart, $weekEnd])
+                ->orWhereHas('updates', function ($updateQuery) use ($weekStart, $weekEnd) {
+                    $updateQuery->whereBetween('created_at', [$weekStart, $weekEnd]);
+                });
+
+            if ($this->rewardTableReady()) {
+                $query->orWhereHas('rewards', function ($rewardQuery) use ($weekStart, $weekEnd) {
+                    $rewardQuery
+                        ->whereBetween('created_at', [$weekStart, $weekEnd])
+                        ->orWhereBetween('updated_at', [$weekStart, $weekEnd]);
+                });
+            }
         })
         ->get();
 
