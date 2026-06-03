@@ -45,8 +45,14 @@ class TaskController extends Controller
         return [
             'ceo',
             'md',
+            'managing_director',
+            'managingdirector',
             'chief_market',
+            'chief_marketing',
+            'chiefmarket',
             'admin',
+            'system_admin',
+            'super_admin',
         ];
     }
 
@@ -1245,6 +1251,15 @@ class TaskController extends Controller
     }
 
     /**
+     * Normalize role names/slugs so values like "Chief Market",
+     * "chief-market", and "chief_market" are treated the same.
+     */
+    private function normalizeRoleKey(string $value): string
+    {
+        return preg_replace('/[\s-]+/', '_', strtolower(trim($value))) ?: '';
+    }
+
+    /**
      * Normalized role slug.
      */
     private function roleSlug(?User $user): string
@@ -1255,8 +1270,8 @@ class TaskController extends Controller
 
         $user->loadMissing('role');
 
-        $roleSlug = strtolower(trim((string) $user->role?->slug));
-        $roleName = strtolower(trim((string) $user->role?->name));
+        $roleSlug = $this->normalizeRoleKey((string) $user->role?->slug);
+        $roleName = $this->normalizeRoleKey((string) $user->role?->name);
 
         return $roleSlug !== '' ? $roleSlug : $roleName;
     }
@@ -1283,7 +1298,8 @@ class TaskController extends Controller
             return false;
         }
 
-        return in_array($this->roleSlug($user), $this->managerRoles(), true);
+        return in_array($this->roleSlug($user), $this->managerRoles(), true)
+            || in_array((int) $user->role_id, [1, 2, 3], true);
     }
 
     /**
@@ -1295,7 +1311,7 @@ class TaskController extends Controller
             return false;
         }
 
-        return in_array($this->roleSlug($user), ['ceo', 'md', 'chief_market', 'admin'], true);
+        return $this->canManageTasks($user);
     }
 
     /**
