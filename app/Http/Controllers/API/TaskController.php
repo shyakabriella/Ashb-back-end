@@ -226,13 +226,13 @@ class TaskController extends Controller
 
         /*
          * PERFORMANCE RULE:
-         * The tasks list should load ONLY the current month by default.
-         * Old/closed months should be read from the monthly report cache,
-         * not loaded again on this live task listing page.
+         * The tasks list should load ONLY the previous month and current month
+         * by default. Older closed months should be read from the monthly report
+         * cache, not loaded again on this live task listing page.
          */
         $fromDate = filled($validated['from_date'] ?? null)
             ? Carbon::parse($validated['from_date'])->startOfDay()
-            : now()->startOfMonth()->startOfDay();
+            : now()->subMonthNoOverflow()->startOfMonth()->startOfDay();
 
         $toDate = filled($validated['to_date'] ?? null)
             ? Carbon::parse($validated['to_date'])->endOfDay()
@@ -284,12 +284,12 @@ class TaskController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Current month tasks fetched successfully.',
+            'message' => 'Previous month and current month tasks fetched successfully.',
             'data' => $tasks,
             'meta' => [
                 'from_date' => $fromDate->toDateString(),
                 'to_date' => $toDate->toDateString(),
-                'period' => 'current_month_live',
+                'period' => 'previous_and_current_month_live',
             ],
         ]);
     }
