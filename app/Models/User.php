@@ -75,12 +75,21 @@ class User extends Authenticatable
 
     /**
      * Tasks assigned to this user.
-     * One user can have one or many tasks.
+     *
+     * One user can have one or many assigned tasks.
      */
     public function assignedTasks(): BelongsToMany
     {
-        return $this->belongsToMany(Task::class, 'task_user', 'user_id', 'task_id')
-            ->withPivot(['assigned_by', 'assigned_at'])
+        return $this->belongsToMany(
+            Task::class,
+            'task_user',
+            'user_id',
+            'task_id'
+        )
+            ->withPivot([
+                'assigned_by',
+                'assigned_at',
+            ])
             ->withTimestamps();
     }
 
@@ -93,10 +102,33 @@ class User extends Authenticatable
     }
 
     /**
+     * Monthly performance targets assigned to this user.
+     *
+     * One employee or intern can have one target for each month.
+     */
+    public function targets(): HasMany
+    {
+        return $this->hasMany(Target::class, 'user_id', 'id');
+    }
+
+    /**
+     * Salary history assigned to this user.
+     *
+     * One employee or intern can have different salary records
+     * based on the effective month.
+     */
+    public function salaries(): HasMany
+    {
+        return $this->hasMany(Salary::class, 'user_id', 'id');
+    }
+
+    /**
      * Get user's full name.
      */
     public function getFullNameAttribute(): string
     {
-        return trim(($this->first_name ?? '') . ' ' . ($this->last_name ?? ''));
+        return trim(
+            ($this->first_name ?? '') . ' ' . ($this->last_name ?? '')
+        );
     }
 }

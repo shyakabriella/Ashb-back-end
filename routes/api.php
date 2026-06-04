@@ -6,6 +6,8 @@ use App\Http\Controllers\API\ProfileController;
 use App\Http\Controllers\API\PropertyController;
 use App\Http\Controllers\API\RegisterController;
 use App\Http\Controllers\API\TaskController;
+use App\Http\Controllers\API\TargetController;
+use App\Http\Controllers\API\SalaryController;
 use App\Http\Controllers\API\ContractController;
 use App\Http\Controllers\API\ContactMessageController;
 use App\Http\Controllers\API\SupportAiController;
@@ -46,7 +48,6 @@ Route::post('support-ai/chat', [SupportAiController::class, 'chat']);
 | Website visitors can view the monthly plans page without logging in.
 */
 Route::get('monthly-plan-page', [MonthlyPlanPageController::class, 'show']);
-
 
 /*
 |--------------------------------------------------------------------------
@@ -106,11 +107,61 @@ Route::middleware('auth:sanctum')->group(function () {
 
     /*
     |--------------------------------------------------------------------------
+    | Monthly employee targets
+    |--------------------------------------------------------------------------
+    | Default target:
+    | - Minimum tasks per month: 30
+    | - Target score percentage: 75%
+    |
+    | Important:
+    | The monthly-scores route must stay before targets/{target}.
+    */
+    Route::controller(TargetController::class)->group(function () {
+        Route::get('targets/monthly-scores', 'index');
+
+        Route::post('targets', 'store');
+
+        Route::get('targets/{target}', 'show');
+        Route::put('targets/{target}', 'update');
+        Route::patch('targets/{target}', 'update');
+        Route::delete('targets/{target}', 'destroy');
+    });
+
+    /*
+    |--------------------------------------------------------------------------
+    | Employee salaries
+    |--------------------------------------------------------------------------
+    | Admin or management can set salary for each employee or intern.
+    | Salary calculations are based on:
+    | - Monthly completed tasks
+    | - Monthly target task minimum
+    | - Monthly task score
+    | - Monthly target score percentage
+    |
+    | Important:
+    | The monthly-calculations route must stay before salaries/{salary}.
+    */
+    Route::controller(SalaryController::class)->group(function () {
+        Route::get('salaries/monthly-calculations', 'index');
+
+        Route::post('salaries', 'store');
+
+        Route::get('salaries/{salary}', 'show');
+        Route::put('salaries/{salary}', 'update');
+        Route::patch('salaries/{salary}', 'update');
+        Route::delete('salaries/{salary}', 'destroy');
+    });
+
+    /*
+    |--------------------------------------------------------------------------
     | Monthly Plan Page Management
     |--------------------------------------------------------------------------
     | Admin can create or update the monthly plans page content from dashboard.
     */
-    Route::post('monthly-plan-page', [MonthlyPlanPageController::class, 'storeOrUpdate']);
+    Route::post(
+        'monthly-plan-page',
+        [MonthlyPlanPageController::class, 'storeOrUpdate']
+    );
 
     /*
     |--------------------------------------------------------------------------
@@ -161,6 +212,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('tasks', 'index');
         Route::post('tasks', 'store');
 
+        /*
+         | These specific routes must remain before tasks/{task}.
+         */
         Route::get('tasks/weekly-report', 'weeklyReport');
         Route::post('tasks/report-cache/rebuild', 'rebuildTaskReportCache');
         Route::get('my-tasks', 'myTasks');
