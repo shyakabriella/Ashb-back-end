@@ -9,7 +9,7 @@ use Illuminate\Support\ServiceProvider;
 class AppServiceProvider extends ServiceProvider
 {
     /**
-     * Register application services.
+     * Register any application services.
      */
     public function register(): void
     {
@@ -17,20 +17,18 @@ class AppServiceProvider extends ServiceProvider
     }
 
     /**
-     * Bootstrap application services.
+     * Bootstrap any application services.
      */
     public function boot(): void
     {
         /*
         |--------------------------------------------------------------------------
-        | Custom forgot-password email
+        | Custom password reset email
         |--------------------------------------------------------------------------
         |
-        | Laravel's default reset notification searches for a Laravel route
-        | named "password.reset".
-        |
-        | Because our password reset page is in Next.js, we create the
-        | frontend reset URL manually and use our custom Blade email.
+        | Laravel normally searches for a route named "password.reset".
+        | Because the password reset page is in the Next.js frontend,
+        | we manually create the frontend reset URL.
         |
         */
 
@@ -54,11 +52,11 @@ class AppServiceProvider extends ServiceProvider
                     'getEmailForPasswordReset'
                 )
                     ? $notifiable->getEmailForPasswordReset()
-                    : ($notifiable->email ?? '');
+                    : (string) ($notifiable->email ?? '');
 
                 $resetUrl = $frontendResetUrl
                     . '?token=' . urlencode($token)
-                    . '&email=' . urlencode((string) $email);
+                    . '&email=' . urlencode($email);
 
                 $passwordBroker = (string) config(
                     'auth.defaults.passwords',
@@ -72,7 +70,7 @@ class AppServiceProvider extends ServiceProvider
 
                 return (new MailMessage)
                     ->subject('Reset Your Password - ' . $appName)
-                    ->view('emails.reset-password', [
+                    ->view('emails.reset-password-link', [
                         'appName' => $appName,
                         'user' => $notifiable,
                         'resetUrl' => $resetUrl,
