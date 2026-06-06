@@ -108,48 +108,48 @@ class TaskController extends Controller
     }
 
     /**
-     * Relations for listing tasks.
+     * Lightweight relations used by task listing pages.
+     *
+     * Do not load task update history, attachments, or every reward here.
+     * Those records are loaded only when a user opens one task through show().
      */
     private function taskListRelations(): array
-{
-    $relations = [
-        'property',
-        'creator',
-        'workers.role',
-        'latestUpdate.user',
-        'latestUpdate.attachments',
-    ];
+    {
+        $relations = [
+            'property',
+            'creator',
+            'workers.role',
+        ];
 
-    if ($this->rewardTableReady()) {
-        $relations[] = 'rewards';
-        $relations[] = 'latestReward';
+        if ($this->rewardTableReady()) {
+            $relations[] = 'latestReward';
+        }
+
+        return $relations;
     }
-
-    return $relations;
-}
 
     /**
      * Relations for showing one task with full history.
      */
     private function taskShowRelations(): array
-{
-    $relations = [
-        'property',
-        'creator',
-        'workers.role',
-        'latestUpdate.user',
-        'latestUpdate.attachments',
-        'updates.user',
-        'updates.attachments',
-    ];
+    {
+        $relations = [
+            'property',
+            'creator',
+            'workers.role',
+            'latestUpdate.user',
+            'latestUpdate.attachments',
+            'updates.user',
+            'updates.attachments',
+        ];
 
-    if ($this->rewardTableReady()) {
-        $relations[] = 'rewards';
-        $relations[] = 'latestReward';
+        if ($this->rewardTableReady()) {
+            $relations[] = 'rewards';
+            $relations[] = 'latestReward';
+        }
+
+        return $relations;
     }
-
-    return $relations;
-}
 
     /**
      * Worker update validation.
@@ -206,6 +206,8 @@ class TaskController extends Controller
      * List tasks.
      * - Employee/Intern sees only assigned tasks
      * - CEO/MD/Chief Market/Admin sees all tasks
+     * - Only lightweight list relations are returned
+     * - Search and status filters run before pagination
      */
     public function index(Request $request): JsonResponse
     {
@@ -222,13 +224,14 @@ class TaskController extends Controller
             'from_date' => ['nullable', 'date'],
             'to_date' => ['nullable', 'date'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+            'search' => ['nullable', 'string', 'max:150'],
+            'status' => ['nullable', Rule::in($this->allowedStatuses())],
+            'property_id' => ['nullable', 'integer', 'exists:properties,id'],
         ]);
 
         /*
-         * PERFORMANCE RULE:
-         * The tasks list should load ONLY the previous month and current month
-         * by default. Older closed months should be read from the monthly report
-         * cache, not loaded again on this live task listing page.
+         * The live task page loads only the previous month and current month.
+         * Older closed periods are handled by the report cache.
          */
         $fromDate = filled($validated['from_date'] ?? null)
             ? Carbon::parse($validated['from_date'])->startOfDay()
@@ -245,28 +248,19 @@ class TaskController extends Controller
             ], 422);
         }
 
-        $query = Task::with($this->taskListRelations());
-
         /*
-         * Include tasks that belong to the selected month/range:
-         * - tasks starting inside the range
-         * - tasks ending inside the range
-         * - tasks that started before and continue through the range
+         * A task overlaps the requested range when it starts before the range
+         * ends and finishes after the range starts. This is simpler and faster
+         * than several OR-based date checks.
          */
-        $query->where(function ($dateQuery) use ($fromDate, $toDate) {
-            $dateQuery
-                ->whereBetween('start_at', [$fromDate, $toDate])
-                ->orWhereBetween('end_at', [$fromDate, $toDate])
-                ->orWhere(function ($overlapQuery) use ($fromDate, $toDate) {
-                    $overlapQuery
-                        ->where('start_at', '<=', $fromDate)
-                        ->where('end_at', '>=', $toDate);
-                });
-        });
+        $query = Task::query()
+            ->with($this->taskListRelations())
+            ->where('start_at', '<=', $toDate)
+            ->where('end_at', '>=', $fromDate);
 
         if ($this->isWorker($user)) {
-            $query->whereHas('workers', function ($q) use ($user) {
-                $q->where('users.id', $user->id);
+            $query->whereHas('workers', function ($workerQuery) use ($user) {
+                $workerQuery->where('users.id', $user->id);
             });
         } elseif (!$this->canManageTasks($user)) {
             return response()->json([
@@ -275,21 +269,64 @@ class TaskController extends Controller
             ], 403);
         }
 
+        if (filled($validated['status'] ?? null)) {
+            $query->where('status', $validated['status']);
+        }
+
+        if (filled($validated['property_id'] ?? null)) {
+            $query->where('property_id', (int) $validated['property_id']);
+        }
+
+        $search = trim((string) ($validated['search'] ?? ''));
+
+        if ($search !== '') {
+            /*
+             * Keep list search on indexed task fields only. Relationship-based
+             * searching can be added later through a dedicated search endpoint.
+             */
+            $query->where(function ($searchQuery) use ($search) {
+                $like = '%' . $search . '%';
+
+                $searchQuery
+                    ->where('title', 'like', $like)
+                    ->orWhere('description', 'like', $like)
+                    ->orWhere('milestone', 'like', $like)
+                    ->orWhere('status', 'like', $like);
+            });
+        }
+
+        if ($this->rewardTableReady()) {
+            /*
+             * Return a small boolean instead of loading every reward row.
+             * latestReward is still eager-loaded for the grade label.
+             */
+            $query->withExists('rewards as is_rewarded');
+        }
+
         $perPage = (int) ($validated['per_page'] ?? 20);
         $perPage = max(1, min($perPage, 100));
 
         $tasks = $query
-            ->latest('start_at')
-            ->paginate($perPage);
+            ->orderByDesc('start_at')
+            ->orderByDesc('id')
+            ->paginate($perPage)
+            ->withQueryString();
 
         return response()->json([
             'success' => true,
-            'message' => 'Previous month and current month tasks fetched successfully.',
+            'message' => 'Tasks fetched successfully.',
             'data' => $tasks,
             'meta' => [
                 'from_date' => $fromDate->toDateString(),
                 'to_date' => $toDate->toDateString(),
                 'period' => 'previous_and_current_month_live',
+                'filters' => [
+                    'search' => $search !== '' ? $search : null,
+                    'status' => $validated['status'] ?? null,
+                    'property_id' => isset($validated['property_id'])
+                        ? (int) $validated['property_id']
+                        : null,
+                ],
             ],
         ]);
     }
@@ -930,7 +967,7 @@ class TaskController extends Controller
             ->map(fn ($id) => (int) $id)
             ->all();
 
-        DB::transaction(function () use ($task, $newWorkerIds, $request) {
+        DB::transaction(function () use ($task, $newWorkerIds, $user) {
             $task->workers()->detach();
 
             $attachData = [];
