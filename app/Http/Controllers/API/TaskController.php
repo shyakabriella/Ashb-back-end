@@ -115,17 +115,23 @@ class TaskController extends Controller
      */
     private function taskListRelations(): array
     {
-        $relations = [
-            'property',
-            'creator',
-            'workers.role',
+        /*
+         * Keep the listing response intentionally small.
+         * Full creator data, worker roles, updates, attachments and reward rows
+         * are loaded only from show() when one task is opened.
+         */
+        return [
+            'property:id,title,name',
+            'workers' => function ($query) {
+                $query->select([
+                    'users.id',
+                    'users.name',
+                    'users.first_name',
+                    'users.last_name',
+                    'users.email',
+                ]);
+            },
         ];
-
-        if ($this->rewardTableReady()) {
-            $relations[] = 'latestReward';
-        }
-
-        return $relations;
     }
 
     /**
@@ -223,16 +229,12 @@ class TaskController extends Controller
         $validated = $request->validate([
             'from_date' => ['nullable', 'date'],
             'to_date' => ['nullable', 'date'],
-            'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:50'],
             'search' => ['nullable', 'string', 'max:150'],
             'status' => ['nullable', Rule::in($this->allowedStatuses())],
             'property_id' => ['nullable', 'integer', 'exists:properties,id'],
         ]);
 
-        /*
-         * The live task page loads only the previous month and current month.
-         * Older closed periods are handled by the report cache.
-         */
         $fromDate = filled($validated['from_date'] ?? null)
             ? Carbon::parse($validated['from_date'])->startOfDay()
             : now()->subMonthNoOverflow()->startOfMonth()->startOfDay();
@@ -248,15 +250,21 @@ class TaskController extends Controller
             ], 422);
         }
 
-        /*
-         * A task overlaps the requested range when it starts before the range
-         * ends and finishes after the range starts. This is simpler and faster
-         * than several OR-based date checks.
-         */
         $query = Task::query()
+            ->select([
+                'tasks.id',
+                'tasks.property_id',
+                'tasks.title',
+                'tasks.start_at',
+                'tasks.end_at',
+                'tasks.status',
+                'tasks.created_by',
+                'tasks.created_at',
+                'tasks.updated_at',
+            ])
             ->with($this->taskListRelations())
-            ->where('start_at', '<=', $toDate)
-            ->where('end_at', '>=', $fromDate);
+            ->where('tasks.start_at', '<=', $toDate)
+            ->where('tasks.end_at', '>=', $fromDate);
 
         if ($this->isWorker($user)) {
             $query->whereHas('workers', function ($workerQuery) use ($user) {
@@ -270,52 +278,112 @@ class TaskController extends Controller
         }
 
         if (filled($validated['status'] ?? null)) {
-            $query->where('status', $validated['status']);
+            $query->where('tasks.status', $validated['status']);
         }
 
         if (filled($validated['property_id'] ?? null)) {
-            $query->where('property_id', (int) $validated['property_id']);
+            $query->where('tasks.property_id', (int) $validated['property_id']);
         }
 
         $search = trim((string) ($validated['search'] ?? ''));
 
         if ($search !== '') {
-            /*
-             * Keep list search on indexed task fields only. Relationship-based
-             * searching can be added later through a dedicated search endpoint.
-             */
             $query->where(function ($searchQuery) use ($search) {
                 $like = '%' . $search . '%';
 
                 $searchQuery
-                    ->where('title', 'like', $like)
-                    ->orWhere('description', 'like', $like)
-                    ->orWhere('milestone', 'like', $like)
-                    ->orWhere('status', 'like', $like);
+                    ->where('tasks.title', 'like', $like)
+                    ->orWhere('tasks.description', 'like', $like)
+                    ->orWhere('tasks.milestone', 'like', $like)
+                    ->orWhere('tasks.status', 'like', $like);
             });
         }
 
-        if ($this->rewardTableReady()) {
-            /*
-             * Return a small boolean instead of loading every reward row.
-             * latestReward is still eager-loaded for the grade label.
-             */
-            $query->withExists('rewards as is_rewarded');
+        $perPage = max(1, min((int) ($validated['per_page'] ?? 15), 50));
+
+        /*
+         * The main task query contains no reward or comment subqueries.
+         * simplePaginate() also avoids the expensive total COUNT(*) query.
+         */
+        $tasks = $query
+            ->orderByDesc('tasks.start_at')
+            ->orderByDesc('tasks.id')
+            ->simplePaginate($perPage)
+            ->withQueryString();
+
+        $taskIds = $tasks->getCollection()
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->values();
+
+        $commentCounts = collect();
+
+        if ($taskIds->isNotEmpty() && Schema::hasTable('task_updates')) {
+            $commentCounts = DB::table('task_updates')
+                ->whereIn('task_id', $taskIds->all())
+                ->selectRaw('task_id, COUNT(*) as comments_count')
+                ->groupBy('task_id')
+                ->pluck('comments_count', 'task_id');
         }
 
-        $perPage = (int) ($validated['per_page'] ?? 20);
-        $perPage = max(1, min($perPage, 100));
+        $latestRewards = collect();
 
-        $tasks = $query
-            ->orderByDesc('start_at')
-            ->orderByDesc('id')
-            ->paginate($perPage)
-            ->withQueryString();
+        if ($taskIds->isNotEmpty() && $this->rewardTableReady()) {
+            $latestRewardIds = DB::table('task_rewards')
+                ->whereIn('task_id', $taskIds->all())
+                ->selectRaw('MAX(id)')
+                ->groupBy('task_id');
+
+            $latestRewards = DB::table('task_rewards')
+                ->whereIn('id', $latestRewardIds)
+                ->get([
+                    'id',
+                    'task_id',
+                    'ranking',
+                    'grading',
+                    'marks_percentage',
+                    'created_at',
+                ])
+                ->keyBy('task_id');
+        }
+
+        $tasks->setCollection(
+            $tasks->getCollection()->map(function (Task $task) use (
+                $commentCounts,
+                $latestRewards
+            ) {
+                $taskId = (int) $task->id;
+                $latestReward = $latestRewards->get($taskId);
+
+                $task->setAttribute(
+                    'comments_count',
+                    (int) ($commentCounts->get($taskId) ?? 0)
+                );
+
+                $task->setAttribute('is_rewarded', $latestReward !== null);
+                $task->setAttribute('ranking', $latestReward->ranking ?? null);
+                $task->setAttribute('grading', $latestReward->grading ?? null);
+                $task->setAttribute(
+                    'marks_percentage',
+                    $latestReward->marks_percentage ?? null
+                );
+
+                return $task;
+            })
+        );
+
+        $taskData = $tasks->toArray();
+        $taskData['has_more'] = $tasks->hasMorePages();
+        $taskData['last_page'] = $tasks->hasMorePages()
+            ? $tasks->currentPage() + 1
+            : $tasks->currentPage();
+        $taskData['total'] = null;
 
         return response()->json([
             'success' => true,
             'message' => 'Tasks fetched successfully.',
-            'data' => $tasks,
+            'data' => $taskData,
             'meta' => [
                 'from_date' => $fromDate->toDateString(),
                 'to_date' => $toDate->toDateString(),
