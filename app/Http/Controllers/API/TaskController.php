@@ -121,11 +121,10 @@ class TaskController extends Controller
          * are loaded only from show() when one task is opened.
          */
         return [
-            'property:id,title,name',
+            'property:id,title',
             'workers' => function ($query) {
                 $query->select([
                     'users.id',
-                    'users.name',
                     'users.first_name',
                     'users.last_name',
                     'users.email',
@@ -413,12 +412,46 @@ class TaskController extends Controller
             ], 403);
         }
 
-        $task->load($this->taskShowRelations());
+        /*
+         * Fast mode is used by the normal task details page.
+         *
+         * It loads the task header immediately and limits activity history so
+         * a task with hundreds of updates or attachments does not block the
+         * whole page. Other pages can omit fast=1 and still receive the full
+         * historical payload.
+         */
+        if ($request->boolean('fast')) {
+            $historyLimit = max(
+                1,
+                min((int) $request->integer('history_limit', 20), 50)
+            );
+
+            $task->load([
+                'property',
+                'creator',
+                'workers.role',
+                'updates' => function ($query) use ($historyLimit) {
+                    $query
+                        ->latest('created_at')
+                        ->limit($historyLimit);
+                },
+                'updates.user',
+                'updates.attachments',
+            ]);
+        } else {
+            $task->load($this->taskShowRelations());
+        }
 
         return response()->json([
             'success' => true,
             'message' => 'Task fetched successfully.',
             'data' => $task,
+            'meta' => [
+                'fast_mode' => $request->boolean('fast'),
+                'history_limit' => $request->boolean('fast')
+                    ? $historyLimit
+                    : null,
+            ],
         ]);
     }
 
@@ -884,9 +917,9 @@ class TaskController extends Controller
             ->orderByDesc('task_rewards.created_at')
             ->get([
                 'task_rewards.*',
-                'recipients.name as recipient_name',
+                DB::raw("TRIM(CONCAT_WS(' ', recipients.first_name, recipients.last_name)) as recipient_name"),
                 'recipients.email as recipient_email',
-                'graders.name as grader_name',
+                DB::raw("TRIM(CONCAT_WS(' ', graders.first_name, graders.last_name)) as grader_name"),
                 'graders.email as grader_email',
             ]);
 
