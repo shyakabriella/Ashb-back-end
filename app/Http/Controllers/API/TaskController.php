@@ -58,7 +58,10 @@ class TaskController extends Controller
     }
 
     /**
-     * Roles allowed to be workers.
+     * Roles included in employee/intern performance reports.
+     *
+     * Task creation and task assignment are not limited to these roles.
+     * Every authenticated active user may receive a task.
      */
     private function workerRoles(): array
     {
@@ -265,15 +268,15 @@ class TaskController extends Controller
             ->where('tasks.start_at', '<=', $toDate)
             ->where('tasks.end_at', '>=', $fromDate);
 
-        if ($this->isWorker($user)) {
+        /*
+         * Managers see every task.
+         * Every other authenticated user sees tasks assigned to their account,
+         * regardless of their role name.
+         */
+        if (!$this->canManageTasks($user)) {
             $query->whereHas('workers', function ($workerQuery) use ($user) {
                 $workerQuery->where('users.id', $user->id);
             });
-        } elseif (!$this->canManageTasks($user)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'You are not allowed to view tasks.',
-            ], 403);
         }
 
         if (filled($validated['status'] ?? null)) {
@@ -458,9 +461,9 @@ class TaskController extends Controller
     /**
      * Save many tasks for one property.
      *
-     * Managers can create tasks and assign employee/intern workers.
-     * Employees/interns can create their own tasks, but those tasks are
-     * automatically assigned to the logged-in user only.
+     * Every authenticated user can create a task.
+     * Managers can assign tasks to any active system user.
+     * Non-manager users create tasks assigned to their own account only.
      */
     public function store(Request $request): JsonResponse
     {
@@ -474,14 +477,6 @@ class TaskController extends Controller
         }
 
         $canManageTasks = $this->canManageTasks($user);
-        $isWorker = $this->isWorker($user);
-
-        if (!$canManageTasks && !$isWorker) {
-            return response()->json([
-                'success' => false,
-                'message' => 'You are not allowed to create tasks.',
-            ], 403);
-        }
 
         $validated = $request->validate([
             'propertyId' => ['required', 'exists:properties,id'],
@@ -509,16 +504,23 @@ class TaskController extends Controller
             }
 
             if ($canManageTasks) {
+                /*
+                 * Managers may assign a task to any active system user.
+                 */
                 $this->validateAssignableUserIds(
                     $taskData['assigneeIds'] ?? [],
                     "tasks.$index.assigneeIds"
                 );
             } else {
                 /*
-                 * Normal worker users cannot assign tasks to other people.
-                 * Even if the frontend sends another user ID, we force it
-                 * to the logged-in employee/intern.
+                 * Every authenticated non-manager can create a task.
+                 * For safety, that task is assigned to the creator only.
                  */
+                $this->validateAssignableUserIds(
+                    [(int) $user->id],
+                    "tasks.$index.assigneeIds"
+                );
+
                 $validated['tasks'][$index]['assigneeIds'] = [(int) $user->id];
             }
         }
@@ -578,15 +580,15 @@ class TaskController extends Controller
 
     /**
      * Update one task.
-     * - Employee/Intern: can update status + comment/files, only assigned task
-     * - Managers: can update full task + comment/files
+     * - Any assigned non-manager user can update status + comment/files
+     * - Managers can update the full task
      * - When status changes => notify CEO + MD
      */
     public function update(Request $request, Task $task): JsonResponse
     {
         $user = $request->user();
 
-        if ($this->isWorker($user)) {
+        if (!$this->canManageTasks($user)) {
             if (!$this->canAccessTask($user, $task)) {
                 return response()->json([
                     'success' => false,
@@ -1098,17 +1100,17 @@ class TaskController extends Controller
     }
 
     /**
-     * Logged-in worker sees only own tasks.
+     * Every authenticated user sees tasks assigned to their account.
      */
     public function myTasks(Request $request): JsonResponse
     {
         $user = $request->user();
 
-        if (!$this->isWorker($user)) {
+        if (!$user) {
             return response()->json([
                 'success' => false,
-                'message' => 'Only employees and interns can access my tasks.',
-            ], 403);
+                'message' => 'Unauthenticated.',
+            ], 401);
         }
 
         $tasks = Task::with($this->taskListRelations())
@@ -1816,17 +1818,19 @@ class TaskController extends Controller
             return true;
         }
 
-        if (!$this->isWorker($user)) {
-            return false;
-        }
-
+        /*
+         * Role does not control access here. Any authenticated user assigned
+         * through task_user may open and work on the task.
+         */
         return $task->workers()
             ->where('users.id', $user->id)
             ->exists();
     }
 
     /**
-     * Only employee/intern can be assigned.
+     * Validate users selected for task assignment.
+     *
+     * Any active system user can be assigned a task, regardless of role.
      */
     private function validateAssignableUserIds(array $assigneeIds, string $field = 'assigneeIds'): void
     {
@@ -1834,28 +1838,46 @@ class TaskController extends Controller
             return;
         }
 
-        $users = User::with('role')
-            ->whereIn('id', $assigneeIds)
+        $normalizedIds = collect($assigneeIds)
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
+            ->unique()
+            ->values();
+
+        $users = User::query()
+            ->whereIn('id', $normalizedIds->all())
             ->get();
 
-        $invalidUsers = $users->filter(function (User $user) {
-            return !$this->isWorker($user);
+        $missingIds = $normalizedIds
+            ->diff($users->pluck('id')->map(fn ($id) => (int) $id))
+            ->values();
+
+        if ($missingIds->isNotEmpty()) {
+            throw ValidationException::withMessages([
+                $field => 'One or more selected users do not exist.',
+            ]);
+        }
+
+        $inactiveUsers = $users->filter(function (User $user) {
+            $isActive = $user->getAttribute('is_active');
+
+            return $isActive !== null && (int) $isActive === 0;
         });
 
-        if ($invalidUsers->isNotEmpty()) {
-            $names = $invalidUsers
-                ->map(fn (User $user) => trim(($user->first_name ?? '') . ' ' . ($user->last_name ?? '')) ?: $user->email ?: ('User #' . $user->id))
+        if ($inactiveUsers->isNotEmpty()) {
+            $names = $inactiveUsers
+                ->map(fn (User $user) => $this->userDisplayName($user))
                 ->values()
                 ->implode(', ');
 
             throw ValidationException::withMessages([
-                $field => "Only employees and interns can be assigned tasks. Invalid selection: {$names}.",
+                $field => "Inactive users cannot be assigned tasks. Invalid selection: {$names}.",
             ]);
         }
     }
 
     /**
-     * Assignable users collection.
+     * Return active users selected for assignment and notification.
      */
     private function getAssignableUsers(array $userIds): Collection
     {
@@ -1865,8 +1887,12 @@ class TaskController extends Controller
 
         return User::with('role')
             ->whereIn('id', $userIds)
+            ->where(function ($query) {
+                $query
+                    ->where('is_active', true)
+                    ->orWhereNull('is_active');
+            })
             ->get()
-            ->filter(fn (User $user) => $this->isWorker($user))
             ->values();
     }
 
