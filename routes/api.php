@@ -9,6 +9,7 @@ use App\Http\Controllers\API\TaskController;
 use App\Http\Controllers\API\TargetController;
 use App\Http\Controllers\API\SalaryController;
 use App\Http\Controllers\API\ContractController;
+use App\Http\Controllers\API\ExpenseController;
 use App\Http\Controllers\API\ContactMessageController;
 use App\Http\Controllers\API\SupportAiController;
 use App\Http\Controllers\API\MonthlyPlanPageController;
@@ -114,9 +115,40 @@ Route::middleware('auth:sanctum')->group(function () {
     |--------------------------------------------------------------------------
     */
 
-    Route::apiResource('properties', PropertyController::class);
-    Route::apiResource('clients', ClientController::class);
-    Route::apiResource('contracts', ContractController::class);
+    Route::apiResource(
+        'properties',
+        PropertyController::class
+    );
+
+    Route::apiResource(
+        'clients',
+        ClientController::class
+    );
+
+    Route::apiResource(
+        'contracts',
+        ContractController::class
+    );
+
+    /*
+    |--------------------------------------------------------------------------
+    | Expense management
+    |--------------------------------------------------------------------------
+    |
+    | The summary route must remain above the expense resource route.
+    | Otherwise Laravel may treat "summary" as an expense identifier.
+    |
+    */
+
+    Route::get(
+        'expenses/summary',
+        [ExpenseController::class, 'summary']
+    );
+
+    Route::apiResource(
+        'expenses',
+        ExpenseController::class
+    );
 
     /*
     |--------------------------------------------------------------------------
@@ -171,15 +203,22 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::controller(ContactMessageController::class)->group(function () {
         Route::get('contact-messages', 'index');
-        Route::get('contact-messages/{contactMessage}', 'show');
+
+        Route::get(
+            'contact-messages/{contactMessage}',
+            'show'
+        );
+
         Route::patch(
             'contact-messages/{contactMessage}/read',
             'markAsRead'
         );
+
         Route::patch(
             'contact-messages/{contactMessage}/replied',
             'markAsReplied'
         );
+
         Route::delete(
             'contact-messages/{contactMessage}',
             'destroy'
@@ -193,30 +232,46 @@ Route::middleware('auth:sanctum')->group(function () {
     */
 
     Route::controller(SupportAiController::class)->group(function () {
-        Route::get('support-ai/knowledge', 'indexKnowledge');
-        Route::post('support-ai/knowledge', 'storeKnowledge');
+        Route::get(
+            'support-ai/knowledge',
+            'indexKnowledge'
+        );
+
+        Route::post(
+            'support-ai/knowledge',
+            'storeKnowledge'
+        );
+
         Route::get(
             'support-ai/knowledge/{knowledge}',
             'showKnowledge'
         );
+
         Route::put(
             'support-ai/knowledge/{knowledge}',
             'updateKnowledge'
         );
+
         Route::patch(
             'support-ai/knowledge/{knowledge}',
             'updateKnowledge'
         );
+
         Route::delete(
             'support-ai/knowledge/{knowledge}',
             'destroyKnowledge'
         );
 
-        Route::get('support-ai/sessions', 'sessions');
+        Route::get(
+            'support-ai/sessions',
+            'sessions'
+        );
+
         Route::get(
             'support-ai/sessions/{session}',
             'sessionMessages'
         );
+
         Route::patch(
             'support-ai/sessions/{session}/close',
             'closeSession'
@@ -236,34 +291,70 @@ Route::middleware('auth:sanctum')->group(function () {
         /*
          * Specific routes must stay before tasks/{task}.
          */
+
         Route::post(
             'tasks/ai-organize',
             'organizeTaskWithGemini'
         )->middleware('throttle:20,1');
 
-        Route::get('tasks/weekly-report', 'weeklyReport');
+        Route::get(
+            'tasks/weekly-report',
+            'weeklyReport'
+        );
+
         Route::post(
             'tasks/report-cache/rebuild',
             'rebuildTaskReportCache'
         );
-        Route::get('my-tasks', 'myTasks');
+
+        Route::get(
+            'my-tasks',
+            'myTasks'
+        );
 
         Route::post(
             'tasks/{task}/assign-workers',
             'assignWorkers'
         );
+
         Route::post(
             'tasks/{task}/sync-workers',
             'syncWorkers'
         );
 
-        Route::get('tasks/{task}/rewards', 'rewards');
-        Route::post('tasks/{task}/reward', 'saveReward');
-        Route::post('tasks/{task}/rewards', 'saveReward');
+        Route::get(
+            'tasks/{task}/rewards',
+            'rewards'
+        );
 
-        Route::get('tasks/{task}', 'show');
-        Route::put('tasks/{task}', 'update');
-        Route::patch('tasks/{task}', 'update');
-        Route::delete('tasks/{task}', 'destroy');
+        Route::post(
+            'tasks/{task}/reward',
+            'saveReward'
+        );
+
+        Route::post(
+            'tasks/{task}/rewards',
+            'saveReward'
+        );
+
+        Route::get(
+            'tasks/{task}',
+            'show'
+        );
+
+        Route::put(
+            'tasks/{task}',
+            'update'
+        );
+
+        Route::patch(
+            'tasks/{task}',
+            'update'
+        );
+
+        Route::delete(
+            'tasks/{task}',
+            'destroy'
+        );
     });
 });
