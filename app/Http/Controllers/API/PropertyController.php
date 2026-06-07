@@ -5,22 +5,17 @@ namespace App\Http\Controllers\API;
 use App\Http\Controllers\API\BaseController as BaseController;
 use App\Models\Property;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 
 class PropertyController extends BaseController
 {
     /**
-     * Display a fast property listing.
+     * Display a paginated listing of properties.
      *
-     * This endpoint intentionally avoids:
-     * - Eloquent model hydration for every row
-     * - Laravel paginator COUNT(*) queries
-     * - Cache table/database lookups
-     *
-     * It performs one direct SQL query and requests one extra row to determine
-     * whether another page exists.
+     * This keeps Laravel's normal paginator response so existing frontend
+     * pages continue receiving current_page, data, last_page, total, from,
+     * and to in the expected structure.
      */
     public function index(Request $request)
     {
@@ -32,7 +27,7 @@ class PropertyController extends BaseController
                 'in:all,available,fully_booked,inactive',
             ],
             'location' => ['nullable', 'string', 'max:255'],
-            'per_page' => ['nullable', 'integer', 'min:1', 'max:30'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:50'],
             'page' => ['nullable', 'integer', 'min:1'],
         ]);
 
@@ -46,14 +41,7 @@ class PropertyController extends BaseController
 
         $validated = $validator->validated();
 
-        $search = trim((string) ($validated['search'] ?? ''));
-        $status = trim((string) ($validated['status'] ?? 'all'));
-        $location = trim((string) ($validated['location'] ?? 'all'));
-        $perPage = max(1, min((int) ($validated['per_page'] ?? 9), 30));
-        $page = max(1, (int) ($validated['page'] ?? 1));
-        $offset = ($page - 1) * $perPage;
-
-        $query = DB::table('properties')
+        $query = Property::query()
             ->select([
                 'id',
                 'title',
@@ -66,95 +54,64 @@ class PropertyController extends BaseController
                 'units',
                 'occupancy',
                 'status',
+                'description',
                 'is_favorite',
-            ]);
+                'created_at',
+                'updated_at',
+            ])
+            ->orderByDesc('id');
+
+        $search = trim((string) ($validated['search'] ?? ''));
 
         if ($search !== '') {
             $query->where(function ($searchQuery) use ($search) {
                 if (ctype_digit($search)) {
-                    $searchQuery->where('id', (int) $search);
-                    return;
+                    $searchQuery->orWhere('id', (int) $search);
                 }
 
                 $like = '%' . $search . '%';
 
                 $searchQuery
-                    ->where('title', 'like', $like)
+                    ->orWhere('title', 'like', $like)
                     ->orWhere('address', 'like', $like)
                     ->orWhere('location', 'like', $like)
                     ->orWhere('slug', 'like', $like);
             });
         }
 
+        $status = trim((string) ($validated['status'] ?? 'all'));
+
         if ($status !== '' && strtolower($status) !== 'all') {
             $query->where('status', $status);
         }
 
+        $location = trim((string) ($validated['location'] ?? 'all'));
+
         if ($location !== '' && strtolower($location) !== 'all') {
-            $query->where('location', 'like', '%' . $location . '%');
+            $query->where(
+                'location',
+                'like',
+                '%' . $location . '%'
+            );
         }
 
-        /*
-         * Fetch one extra row. If it exists, there is another page.
-         * This avoids Laravel's expensive total COUNT(*) query.
-         */
-        $rows = $query
-            ->orderByDesc('id')
-            ->offset($offset)
-            ->limit($perPage + 1)
-            ->get();
+        $perPage = max(
+            1,
+            min((int) ($validated['per_page'] ?? 12), 50)
+        );
 
-        $hasMore = $rows->count() > $perPage;
-        $rows = $rows->take($perPage)->values();
+        $properties = $query
+            ->paginate($perPage)
+            ->withQueryString();
 
-        $properties = $rows->map(function (object $property): array {
-            $occupancy = (int) ($property->occupancy ?? 0);
+        $properties->getCollection()->transform(
+            fn (Property $property): array => $this->transformProperty($property)
+        );
 
-            return [
-                'id' => (int) $property->id,
-                'title' => (string) $property->title,
-                'slug' => $property->slug,
-                'href' => $property->href
-                    ?: '/dashboard/properties/' . $property->id,
-                'image' => $property->image,
-                'price' => $property->price !== null
-                    ? (float) $property->price
-                    : null,
-                'address' => (string) ($property->address ?? ''),
-                'location' => $property->location,
-                'units' => (int) ($property->units ?? 0),
-                'occupancy' => $occupancy,
-                'status' => $property->status
-                    ?: ($occupancy >= 100 ? 'fully_booked' : 'available'),
-                'is_favorite' => (bool) ($property->is_favorite ?? false),
-            ];
-        })->all();
-
-        $count = count($properties);
-        $from = $count > 0 ? $offset + 1 : 0;
-        $to = $count > 0 ? $offset + $count : 0;
-
-        return $this->sendResponse([
-            'current_page' => $page,
-            'data' => $properties,
-            'from' => $from,
-            'to' => $to,
-            'per_page' => $perPage,
-            'has_more' => $hasMore,
-            'last_page' => $hasMore ? $page + 1 : $page,
-            'next_page_url' => $hasMore
-                ? $request->fullUrlWithQuery(['page' => $page + 1])
-                : null,
-            'prev_page_url' => $page > 1
-                ? $request->fullUrlWithQuery(['page' => $page - 1])
-                : null,
-
-            /*
-             * Total is intentionally null because calculating the exact total
-             * requires another COUNT(*) query.
-             */
-            'total' => null,
-        ], 'Properties retrieved successfully.');
+        return $this->sendResponse(
+            $properties,
+            'Properties retrieved successfully.'
+        );
     }
 
     /**
