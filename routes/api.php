@@ -88,7 +88,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('users/{user}', 'destroyUser');
 
         /*
-         | These aliases are for your admin profile page.
+         | These aliases are for the admin profile page.
          | Example: /api/users/3/profile
          */
         Route::get('users/{user}/profile', 'showUser');
@@ -211,6 +211,18 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::controller(TaskController::class)->group(function () {
         Route::get('tasks', 'index');
         Route::post('tasks', 'store');
+
+        /*
+         | Gemini task organizer.
+         |
+         | This route must remain before tasks/{task}; otherwise Laravel may
+         | interpret "ai-organize" as a task ID.
+         |
+         | The throttle allows each authenticated user up to 20 requests
+         | per minute.
+         */
+        Route::post('tasks/ai-organize', 'organizeTaskWithGemini')
+            ->middleware('throttle:20,1');
 
         /*
          | These specific routes must remain before tasks/{task}.
