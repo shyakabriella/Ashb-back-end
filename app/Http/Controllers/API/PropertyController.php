@@ -11,107 +11,55 @@ use Illuminate\Support\Str;
 class PropertyController extends BaseController
 {
     /**
-     * Display a paginated listing of properties.
-     *
-     * This keeps Laravel's normal paginator response so existing frontend
-     * pages continue receiving current_page, data, last_page, total, from,
-     * and to in the expected structure.
+     * Display a listing of properties.
      */
     public function index(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'search' => ['nullable', 'string', 'max:255'],
-            'status' => [
-                'nullable',
-                'string',
-                'in:all,available,fully_booked,inactive',
-            ],
-            'location' => ['nullable', 'string', 'max:255'],
-            'per_page' => ['nullable', 'integer', 'min:1', 'max:50'],
-            'page' => ['nullable', 'integer', 'min:1'],
+            'search' => 'nullable|string|max:255',
+            'status' => 'nullable|string|in:all,available,fully_booked,inactive',
+            'location' => 'nullable|string|max:255',
+            'per_page' => 'nullable|integer|min:1|max:100',
         ]);
 
         if ($validator->fails()) {
-            return $this->sendError(
-                'Validation Error.',
-                $validator->errors(),
-                422
-            );
+            return $this->sendError('Validation Error.', $validator->errors(), 422);
         }
 
-        $validated = $validator->validated();
+        $query = Property::query()->latest();
 
-        $query = Property::query()
-            ->select([
-                'id',
-                'title',
-                'slug',
-                'href',
-                'image',
-                'price',
-                'address',
-                'location',
-                'units',
-                'occupancy',
-                'status',
-                'description',
-                'is_favorite',
-                'created_at',
-                'updated_at',
-            ])
-            ->orderByDesc('id');
+        if ($request->filled('search')) {
+            $search = trim((string) $request->search);
 
-        $search = trim((string) ($validated['search'] ?? ''));
-
-        if ($search !== '') {
-            $query->where(function ($searchQuery) use ($search) {
-                if (ctype_digit($search)) {
-                    $searchQuery->orWhere('id', (int) $search);
+            $query->where(function ($q) use ($search) {
+                if (is_numeric($search)) {
+                    $q->orWhere('id', (int) $search);
                 }
 
-                $like = '%' . $search . '%';
-
-                $searchQuery
-                    ->orWhere('title', 'like', $like)
-                    ->orWhere('address', 'like', $like)
-                    ->orWhere('location', 'like', $like)
-                    ->orWhere('slug', 'like', $like);
+                $q->orWhere('title', 'like', "%{$search}%")
+                    ->orWhere('address', 'like', "%{$search}%")
+                    ->orWhere('location', 'like', "%{$search}%")
+                    ->orWhere('slug', 'like', "%{$search}%");
             });
         }
 
-        $status = trim((string) ($validated['status'] ?? 'all'));
-
-        if ($status !== '' && strtolower($status) !== 'all') {
-            $query->where('status', $status);
+        if ($request->filled('status') && $request->status !== 'all') {
+            $query->where('status', $request->status);
         }
 
-        $location = trim((string) ($validated['location'] ?? 'all'));
-
-        if ($location !== '' && strtolower($location) !== 'all') {
-            $query->where(
-                'location',
-                'like',
-                '%' . $location . '%'
-            );
+        if ($request->filled('location') && strtolower((string) $request->location) !== 'all') {
+            $query->where('location', 'like', '%' . trim((string) $request->location) . '%');
         }
 
-        $perPage = max(
-            1,
-            min((int) ($validated['per_page'] ?? 12), 50)
-        );
+        $perPage = (int) $request->get('per_page', 12);
 
-        $properties = $query
-            ->paginate($perPage)
-            ->withQueryString();
+        $properties = $query->paginate($perPage);
 
-        $properties->getCollection()->transform(
-            fn (Property $property): array => $this->transformProperty($property)
-        );
+        $properties->getCollection()->transform(function ($property) {
+            return $this->transformProperty($property);
+        });
 
-        return $this->sendResponse(
-            $properties,
-            'Properties retrieved successfully.'
-        );
+        return $this->sendResponse($properties, 'Properties retrieved successfully.');
     }
 
     /**
