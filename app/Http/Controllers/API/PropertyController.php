@@ -15,9 +15,9 @@ class PropertyController extends BaseController
     /**
      * Display a lightweight, paginated property list.
      *
-     * The listing intentionally excludes description and timestamps.
-     * It also avoids returning legacy base64 images because they can make
-     * the JSON response extremely large and slow.
+     * The image column is returned exactly as stored in the database so the
+     * property cards and the property details page use the same real image.
+     * Description and timestamps remain excluded from the list response.
      */
     public function index(Request $request)
     {
@@ -341,9 +341,8 @@ class PropertyController extends BaseController
             'slug' => $property->slug,
             'href' => $property->href
                 ?: '/dashboard/properties/' . $property->id,
-            'image' => $forList
-                ? $this->imageForPropertyList($property->image)
-                : $property->image,
+            'image' => $property->image,
+            'image_url' => $this->resolvePropertyImageUrl($property->image),
             'price' => $property->price !== null
                 ? (float) $property->price
                 : null,
@@ -435,16 +434,48 @@ class PropertyController extends BaseController
     }
 
     /**
-     * Legacy base64 images are intentionally omitted from the list endpoint.
-     * They remain available from the single-property endpoint.
+     * Return a browser-ready image value while preserving the real database
+     * image in the separate `image` field.
+     *
+     * Existing base64 images are returned unchanged. Relative Laravel public
+     * storage paths are converted to complete URLs.
      */
-    private function imageForPropertyList(?string $image): ?string
+    private function resolvePropertyImageUrl(?string $image): ?string
     {
-        if (!$image || Str::startsWith($image, 'data:image/')) {
+        $value = trim((string) $image);
+
+        if ($value === '') {
             return null;
         }
 
-        return $image;
+        if (Str::startsWith($value, 'data:image/')) {
+            return $value;
+        }
+
+        if (Str::startsWith($value, ['http://', 'https://', 'blob:'])) {
+            return $value;
+        }
+
+        $normalized = str_replace('\\', '/', $value);
+        $normalized = ltrim($normalized, '/');
+
+        if (Str::startsWith($normalized, 'storage/app/public/')) {
+            $normalized = Str::after($normalized, 'storage/app/public/');
+        }
+
+        if (Str::startsWith($normalized, 'public/storage/')) {
+            $normalized = Str::after($normalized, 'public/storage/');
+        }
+
+        if (Str::startsWith($normalized, 'storage/')) {
+            return url('/' . $normalized);
+        }
+
+        $storageUrl = Storage::disk('public')->url($normalized);
+
+        return Str::startsWith($storageUrl, ['http://', 'https://'])
+            ? $storageUrl
+            : url($storageUrl);
     }
 
     /**
@@ -452,20 +483,27 @@ class PropertyController extends BaseController
      */
     private function deleteStoredPropertyImage(?string $image): void
     {
-        if (!$image) {
+        $value = trim((string) $image);
+
+        if ($value === '' || Str::startsWith($value, 'data:image/')) {
             return;
         }
 
-        $path = parse_url($image, PHP_URL_PATH);
+        $path = parse_url($value, PHP_URL_PATH);
+        $normalized = is_string($path) && $path !== '' ? $path : $value;
+        $normalized = str_replace('\\', '/', $normalized);
+        $normalized = ltrim($normalized, '/');
 
-        if (!is_string($path) || !Str::startsWith($path, '/storage/')) {
-            return;
+        if (Str::startsWith($normalized, 'storage/app/public/')) {
+            $normalized = Str::after($normalized, 'storage/app/public/');
+        } elseif (Str::startsWith($normalized, 'public/storage/')) {
+            $normalized = Str::after($normalized, 'public/storage/');
+        } elseif (Str::startsWith($normalized, 'storage/')) {
+            $normalized = Str::after($normalized, 'storage/');
         }
 
-        $relativePath = Str::after($path, '/storage/');
-
-        if ($relativePath !== '') {
-            Storage::disk('public')->delete($relativePath);
+        if ($normalized !== '' && Str::startsWith($normalized, 'properties/')) {
+            Storage::disk('public')->delete($normalized);
         }
     }
 
