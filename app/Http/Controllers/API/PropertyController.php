@@ -276,18 +276,24 @@ class PropertyController extends BaseController
             return $this->sendError('Property not found.', [], 404);
         }
 
+        /*
+         * PATCH-safe validation: fields that are not submitted are preserved.
+         * This allows the frontend to update only the price, status, title, or
+         * any other selected field without replacing the property image or
+         * clearing unrelated database columns.
+         */
         $validator = Validator::make($request->all(), [
             'title' => 'sometimes|required|string|max:255',
-            'image' => 'nullable|string',
+            'image' => 'sometimes|nullable|string',
             'price' => 'sometimes|nullable|numeric|min:0',
             'address' => 'sometimes|required|string|max:255',
-            'location' => 'nullable|string|max:255',
+            'location' => 'sometimes|nullable|string|max:255',
             'units' => 'sometimes|required|integer|min:0',
-            'occupancy' => 'nullable|integer|min:0|max:100',
-            'status' => 'nullable|string|in:available,fully_booked,inactive',
-            'description' => 'nullable|string',
-            'is_favorite' => 'nullable|boolean',
-            'href' => 'nullable|string|max:255|unique:properties,href,' . $property->id,
+            'occupancy' => 'sometimes|nullable|integer|min:0|max:100',
+            'status' => 'sometimes|nullable|string|in:available,fully_booked,inactive',
+            'description' => 'sometimes|nullable|string',
+            'is_favorite' => 'sometimes|nullable|boolean',
+            'href' => 'sometimes|nullable|string|max:255|unique:properties,href,' . $property->id,
         ]);
 
         if ($validator->fails()) {
