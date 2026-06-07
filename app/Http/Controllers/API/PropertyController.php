@@ -5,13 +5,19 @@ namespace App\Http\Controllers\API;
 use App\Http\Controllers\API\BaseController as BaseController;
 use App\Models\Property;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class PropertyController extends BaseController
 {
     /**
-     * Display a listing of properties.
+     * Display a lightweight, paginated property list.
+     *
+     * The listing intentionally excludes description and timestamps.
+     * It also avoids returning legacy base64 images because they can make
+     * the JSON response extremely large and slow.
      */
     public function index(Request $request)
     {
@@ -19,47 +25,89 @@ class PropertyController extends BaseController
             'search' => 'nullable|string|max:255',
             'status' => 'nullable|string|in:all,available,fully_booked,inactive',
             'location' => 'nullable|string|max:255',
-            'per_page' => 'nullable|integer|min:1|max:100',
+            'page' => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:1|max:50',
         ]);
 
         if ($validator->fails()) {
-            return $this->sendError('Validation Error.', $validator->errors(), 422);
+            return $this->sendError(
+                'Validation Error.',
+                $validator->errors(),
+                422
+            );
         }
 
-        $query = Property::query()->latest();
+        $query = Property::query()
+            ->select([
+                'id',
+                'title',
+                'slug',
+                'href',
+                'image',
+                'price',
+                'address',
+                'location',
+                'units',
+                'occupancy',
+                'status',
+                'is_favorite',
+            ])
+            ->orderByDesc('id');
 
         if ($request->filled('search')) {
-            $search = trim((string) $request->search);
+            $search = trim((string) $request->input('search'));
 
-            $query->where(function ($q) use ($search) {
+            $query->where(function ($subQuery) use ($search) {
                 if (is_numeric($search)) {
-                    $q->orWhere('id', (int) $search);
+                    $subQuery->orWhere('id', (int) $search);
                 }
 
-                $q->orWhere('title', 'like', "%{$search}%")
-                    ->orWhere('address', 'like', "%{$search}%")
-                    ->orWhere('location', 'like', "%{$search}%")
-                    ->orWhere('slug', 'like', "%{$search}%");
+                $subQuery
+                    ->orWhere('title', 'like', '%' . $search . '%')
+                    ->orWhere('address', 'like', '%' . $search . '%')
+                    ->orWhere('location', 'like', '%' . $search . '%')
+                    ->orWhere('slug', 'like', '%' . $search . '%');
             });
         }
 
-        if ($request->filled('status') && $request->status !== 'all') {
-            $query->where('status', $request->status);
+        if (
+            $request->filled('status') &&
+            $request->input('status') !== 'all'
+        ) {
+            $query->where('status', $request->input('status'));
         }
 
-        if ($request->filled('location') && strtolower((string) $request->location) !== 'all') {
-            $query->where('location', 'like', '%' . trim((string) $request->location) . '%');
+        if (
+            $request->filled('location') &&
+            strtolower((string) $request->input('location')) !== 'all'
+        ) {
+            $location = trim((string) $request->input('location'));
+
+            $query->where('location', 'like', '%' . $location . '%');
         }
 
-        $perPage = (int) $request->get('per_page', 12);
+        $perPage = min(
+            max((int) $request->input('per_page', 12), 1),
+            50
+        );
 
-        $properties = $query->paginate($perPage);
+        $properties = $query
+            ->paginate($perPage)
+            ->withQueryString();
 
-        $properties->getCollection()->transform(function ($property) {
-            return $this->transformProperty($property);
-        });
+        $properties->setCollection(
+            $properties->getCollection()->map(
+                fn (Property $property) => $this->transformProperty(
+                    $property,
+                    true
+                )
+            )
+        );
 
-        return $this->sendResponse($properties, 'Properties retrieved successfully.');
+        return $this->sendResponse(
+            $properties,
+            'Properties retrieved successfully.'
+        );
     }
 
     /**
@@ -67,11 +115,6 @@ class PropertyController extends BaseController
      */
     public function store(Request $request)
     {
-        /**
-         * Important:
-         * Occupancy and description are now optional because they were removed
-         * from the Add Property popup.
-         */
         $validator = Validator::make($request->all(), [
             'title' => 'required|string|max:255',
             'image' => 'nullable|string',
@@ -87,38 +130,46 @@ class PropertyController extends BaseController
         ]);
 
         if ($validator->fails()) {
-            return $this->sendError('Validation Error.', $validator->errors(), 422);
+            return $this->sendError(
+                'Validation Error.',
+                $validator->errors(),
+                422
+            );
         }
 
         $data = $validator->validated();
 
-        $occupancy = array_key_exists('occupancy', $data) && $data['occupancy'] !== null
-            ? (int) $data['occupancy']
-            : 0;
+        $occupancy = array_key_exists('occupancy', $data) &&
+            $data['occupancy'] !== null
+                ? (int) $data['occupancy']
+                : 0;
 
-        $description = array_key_exists('description', $data) && trim((string) $data['description']) !== ''
-            ? trim((string) $data['description'])
-            : null;
+        $description = array_key_exists('description', $data) &&
+            trim((string) $data['description']) !== ''
+                ? trim((string) $data['description'])
+                : null;
 
-        $data['slug'] = $this->generateUniqueSlug($data['title']);
+        $storedImage = $this->storePropertyImage(
+            $data['image'] ?? null
+        );
 
-        if (!isset($data['status']) || empty($data['status'])) {
-            $data['status'] = $occupancy >= 100 ? 'fully_booked' : 'available';
-        }
+        $status = $data['status'] ??
+            ($occupancy >= 100 ? 'fully_booked' : 'available');
 
         $property = Property::create([
             'title' => trim((string) $data['title']),
-            'slug' => $data['slug'],
+            'slug' => $this->generateUniqueSlug($data['title']),
             'href' => $data['href'] ?? null,
-            'image' => $data['image'] ?? null,
+            'image' => $storedImage,
             'price' => $data['price'] ?? null,
             'address' => trim((string) $data['address']),
-            'location' => isset($data['location']) && trim((string) $data['location']) !== ''
-                ? trim((string) $data['location'])
-                : null,
+            'location' => isset($data['location']) &&
+                trim((string) $data['location']) !== ''
+                    ? trim((string) $data['location'])
+                    : null,
             'units' => (int) $data['units'],
             'occupancy' => $occupancy,
-            'status' => $data['status'],
+            'status' => $status,
             'description' => $description,
             'is_favorite' => (bool) ($data['is_favorite'] ?? false),
         ]);
@@ -142,7 +193,7 @@ class PropertyController extends BaseController
         $property = Property::find($id);
 
         if (!$property) {
-            return $this->sendError('Property not found.');
+            return $this->sendError('Property not found.', [], 404);
         }
 
         return $this->sendResponse(
@@ -159,14 +210,9 @@ class PropertyController extends BaseController
         $property = Property::find($id);
 
         if (!$property) {
-            return $this->sendError('Property not found.');
+            return $this->sendError('Property not found.', [], 404);
         }
 
-        /**
-         * Important:
-         * Occupancy and description are optional.
-         * If they are not sent, we do not force validation error.
-         */
         $validator = Validator::make($request->all(), [
             'title' => 'sometimes|required|string|max:255',
             'image' => 'nullable|string',
@@ -182,14 +228,21 @@ class PropertyController extends BaseController
         ]);
 
         if ($validator->fails()) {
-            return $this->sendError('Validation Error.', $validator->errors(), 422);
+            return $this->sendError(
+                'Validation Error.',
+                $validator->errors(),
+                422
+            );
         }
 
         $data = $validator->validated();
 
-        if (array_key_exists('title', $data) && !empty($data['title'])) {
+        if (array_key_exists('title', $data)) {
             $data['title'] = trim((string) $data['title']);
-            $data['slug'] = $this->generateUniqueSlug($data['title'], $property->id);
+            $data['slug'] = $this->generateUniqueSlug(
+                $data['title'],
+                (int) $property->id
+            );
         }
 
         if (array_key_exists('address', $data)) {
@@ -197,15 +250,17 @@ class PropertyController extends BaseController
         }
 
         if (array_key_exists('location', $data)) {
-            $data['location'] = trim((string) ($data['location'] ?? '')) !== ''
-                ? trim((string) $data['location'])
-                : null;
+            $data['location'] =
+                trim((string) ($data['location'] ?? '')) !== ''
+                    ? trim((string) $data['location'])
+                    : null;
         }
 
         if (array_key_exists('description', $data)) {
-            $data['description'] = trim((string) ($data['description'] ?? '')) !== ''
-                ? trim((string) $data['description'])
-                : null;
+            $data['description'] =
+                trim((string) ($data['description'] ?? '')) !== ''
+                    ? trim((string) $data['description'])
+                    : null;
         }
 
         if (array_key_exists('occupancy', $data)) {
@@ -213,8 +268,13 @@ class PropertyController extends BaseController
                 ? 0
                 : (int) $data['occupancy'];
 
-            if (!array_key_exists('status', $data) && $property->status !== 'inactive') {
-                $data['status'] = $data['occupancy'] >= 100 ? 'fully_booked' : 'available';
+            if (
+                !array_key_exists('status', $data) &&
+                $property->status !== 'inactive'
+            ) {
+                $data['status'] = $data['occupancy'] >= 100
+                    ? 'fully_booked'
+                    : 'available';
             }
         }
 
@@ -224,6 +284,17 @@ class PropertyController extends BaseController
 
         if (array_key_exists('is_favorite', $data)) {
             $data['is_favorite'] = (bool) $data['is_favorite'];
+        }
+
+        if (array_key_exists('image', $data)) {
+            $oldImage = $property->image;
+            $newImage = $this->storePropertyImage($data['image']);
+
+            $data['image'] = $newImage;
+
+            if ($oldImage && $oldImage !== $newImage) {
+                $this->deleteStoredPropertyImage($oldImage);
+            }
         }
 
         $property->update($data);
@@ -247,8 +318,10 @@ class PropertyController extends BaseController
         $property = Property::find($id);
 
         if (!$property) {
-            return $this->sendError('Property not found.');
+            return $this->sendError('Property not found.', [], 404);
         }
+
+        $this->deleteStoredPropertyImage($property->image);
 
         $property->delete();
 
@@ -256,34 +329,153 @@ class PropertyController extends BaseController
     }
 
     /**
-     * Convert model to frontend-friendly structure.
+     * Convert the model to a frontend-friendly structure.
      */
-    private function transformProperty(Property $property): array
-    {
-        return [
+    private function transformProperty(
+        Property $property,
+        bool $forList = false
+    ): array {
+        $response = [
             'id' => $property->id,
             'title' => $property->title,
             'slug' => $property->slug,
-            'href' => $property->href ?: '/dashboard/properties/' . $property->id,
-            'image' => $property->image,
-            'price' => $property->price !== null ? (float) $property->price : null,
+            'href' => $property->href
+                ?: '/dashboard/properties/' . $property->id,
+            'image' => $forList
+                ? $this->imageForPropertyList($property->image)
+                : $property->image,
+            'price' => $property->price !== null
+                ? (float) $property->price
+                : null,
             'address' => $property->address,
             'location' => $property->location,
             'units' => (int) ($property->units ?? 0),
             'occupancy' => (int) ($property->occupancy ?? 0),
             'status' => $property->status ?: 'available',
-            'description' => $property->description,
             'is_favorite' => (bool) $property->is_favorite,
-            'created_at' => $property->created_at,
-            'updated_at' => $property->updated_at,
         ];
+
+        if (!$forList) {
+            $response['description'] = $property->description;
+            $response['created_at'] = $property->created_at;
+            $response['updated_at'] = $property->updated_at;
+        }
+
+        return $response;
     }
 
     /**
-     * Generate unique slug.
+     * Convert an uploaded base64 data URL to a real file.
+     *
+     * Normal URLs and storage paths are kept unchanged.
      */
-    private function generateUniqueSlug(string $title, ?int $ignoreId = null): string
+    private function storePropertyImage(?string $image): ?string
     {
+        if ($image === null || trim($image) === '') {
+            return null;
+        }
+
+        $image = trim($image);
+
+        if (!Str::startsWith($image, 'data:image/')) {
+            return $image;
+        }
+
+        if (!preg_match(
+            '/^data:image\/(jpeg|jpg|png|webp|gif);base64,(.+)$/s',
+            $image,
+            $matches
+        )) {
+            throw ValidationException::withMessages([
+                'image' => ['The image data is invalid.'],
+            ]);
+        }
+
+        $extension = strtolower($matches[1]);
+        $extension = $extension === 'jpeg' ? 'jpg' : $extension;
+
+        $decodedImage = base64_decode(
+            preg_replace('/\s+/', '', $matches[2]),
+            true
+        );
+
+        if ($decodedImage === false) {
+            throw ValidationException::withMessages([
+                'image' => ['The image could not be decoded.'],
+            ]);
+        }
+
+        if (strlen($decodedImage) > 8 * 1024 * 1024) {
+            throw ValidationException::withMessages([
+                'image' => ['The image must not be larger than 8 MB.'],
+            ]);
+        }
+
+        $relativePath = 'properties/' .
+            Str::uuid()->toString() .
+            '.' .
+            $extension;
+
+        $saved = Storage::disk('public')->put(
+            $relativePath,
+            $decodedImage
+        );
+
+        if (!$saved) {
+            throw ValidationException::withMessages([
+                'image' => ['The image could not be saved.'],
+            ]);
+        }
+
+        $storageUrl = Storage::disk('public')->url($relativePath);
+
+        return Str::startsWith($storageUrl, ['http://', 'https://'])
+            ? $storageUrl
+            : url($storageUrl);
+    }
+
+    /**
+     * Legacy base64 images are intentionally omitted from the list endpoint.
+     * They remain available from the single-property endpoint.
+     */
+    private function imageForPropertyList(?string $image): ?string
+    {
+        if (!$image || Str::startsWith($image, 'data:image/')) {
+            return null;
+        }
+
+        return $image;
+    }
+
+    /**
+     * Delete only files that belong to Laravel public storage.
+     */
+    private function deleteStoredPropertyImage(?string $image): void
+    {
+        if (!$image) {
+            return;
+        }
+
+        $path = parse_url($image, PHP_URL_PATH);
+
+        if (!is_string($path) || !Str::startsWith($path, '/storage/')) {
+            return;
+        }
+
+        $relativePath = Str::after($path, '/storage/');
+
+        if ($relativePath !== '') {
+            Storage::disk('public')->delete($relativePath);
+        }
+    }
+
+    /**
+     * Generate a unique slug.
+     */
+    private function generateUniqueSlug(
+        string $title,
+        ?int $ignoreId = null
+    ): string {
         $baseSlug = Str::slug($title);
 
         if ($baseSlug === '') {
@@ -296,18 +488,16 @@ class PropertyController extends BaseController
         while (true) {
             $query = Property::where('slug', $slug);
 
-            if ($ignoreId) {
+            if ($ignoreId !== null) {
                 $query->where('id', '!=', $ignoreId);
             }
 
             if (!$query->exists()) {
-                break;
+                return $slug;
             }
 
             $slug = $baseSlug . '-' . $counter;
             $counter++;
         }
-
-        return $slug;
     }
 }
