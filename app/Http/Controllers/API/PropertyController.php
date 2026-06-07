@@ -4,33 +4,25 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\API\BaseController as BaseController;
 use App\Models\Property;
-use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 
 class PropertyController extends BaseController
 {
     /**
-     * Short cache duration for property listing requests.
+     * Display a fast property listing.
      *
-     * The version number is increased after create, update, or delete, so users
-     * never remain stuck on an old property list.
-     */
-    private const LIST_CACHE_SECONDS = 45;
-    private const LIST_CACHE_VERSION_KEY = 'properties:list:version';
-
-    /**
-     * Display a fast, lightweight property listing.
+     * This endpoint intentionally avoids:
+     * - Eloquent model hydration for every row
+     * - Laravel paginator COUNT(*) queries
+     * - Cache table/database lookups
      *
-     * Performance improvements:
-     * - Selects only fields required by the property cards.
-     * - Uses simplePaginate() to avoid an expensive COUNT(*) query.
-     * - Caches identical list/filter requests briefly.
-     * - Orders by the indexed primary key instead of loading every record.
+     * It performs one direct SQL query and requests one extra row to determine
+     * whether another page exists.
      */
-    public function index(Request $request): JsonResponse
+    public function index(Request $request)
     {
         $validator = Validator::make($request->all(), [
             'search' => ['nullable', 'string', 'max:255'],
@@ -40,7 +32,7 @@ class PropertyController extends BaseController
                 'in:all,available,fully_booked,inactive',
             ],
             'location' => ['nullable', 'string', 'max:255'],
-            'per_page' => ['nullable', 'integer', 'min:1', 'max:50'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:30'],
             'page' => ['nullable', 'integer', 'min:1'],
         ]);
 
@@ -57,212 +49,11 @@ class PropertyController extends BaseController
         $search = trim((string) ($validated['search'] ?? ''));
         $status = trim((string) ($validated['status'] ?? 'all'));
         $location = trim((string) ($validated['location'] ?? 'all'));
-        $perPage = max(1, min((int) ($validated['per_page'] ?? 12), 50));
+        $perPage = max(1, min((int) ($validated['per_page'] ?? 9), 30));
         $page = max(1, (int) ($validated['page'] ?? 1));
+        $offset = ($page - 1) * $perPage;
 
-        $version = (int) Cache::get(self::LIST_CACHE_VERSION_KEY, 1);
-
-        $cacheKey = 'properties:list:v' . $version . ':' . sha1(json_encode([
-            'search' => $search,
-            'status' => $status,
-            'location' => $location,
-            'per_page' => $perPage,
-            'page' => $page,
-        ]) ?: '');
-
-        $payload = Cache::remember(
-            $cacheKey,
-            now()->addSeconds(self::LIST_CACHE_SECONDS),
-            function () use (
-                $search,
-                $status,
-                $location,
-                $perPage,
-                $page
-            ): array {
-                $query = Property::query()
-                    ->select([
-                        'id',
-                        'title',
-                        'slug',
-                        'href',
-                        'image',
-                        'price',
-                        'address',
-                        'location',
-                        'units',
-                        'occupancy',
-                        'status',
-                        'description',
-                        'is_favorite',
-                        'created_at',
-                        'updated_at',
-                    ])
-                    ->orderByDesc('id');
-
-                if ($search !== '') {
-                    $query->where(function ($searchQuery) use ($search) {
-                        if (ctype_digit($search)) {
-                            $searchQuery->where('id', (int) $search);
-                        } else {
-                            $like = '%' . $search . '%';
-
-                            $searchQuery
-                                ->where('title', 'like', $like)
-                                ->orWhere('address', 'like', $like)
-                                ->orWhere('location', 'like', $like)
-                                ->orWhere('slug', 'like', $like);
-                        }
-                    });
-                }
-
-                if ($status !== '' && strtolower($status) !== 'all') {
-                    $query->where('status', $status);
-                }
-
-                if ($location !== '' && strtolower($location) !== 'all') {
-                    $query->where(
-                        'location',
-                        'like',
-                        '%' . $location . '%'
-                    );
-                }
-
-                /*
-                 * simplePaginate() avoids the total COUNT(*) query that can make
-                 * a large property table slow. It still supports Previous/Next.
-                 */
-                $properties = $query->simplePaginate(
-                    perPage: $perPage,
-                    columns: ['*'],
-                    pageName: 'page',
-                    page: $page
-                );
-
-                $properties->getCollection()->transform(
-                    fn (Property $property): array =>
-                        $this->transformProperty($property)
-                );
-
-                $data = $properties->toArray();
-
-                $data['has_more'] = $properties->hasMorePages();
-                $data['last_page'] = $properties->hasMorePages()
-                    ? $properties->currentPage() + 1
-                    : $properties->currentPage();
-
-                /*
-                 * null is intentional: avoiding a total count is one of the
-                 * largest performance improvements on a large table.
-                 */
-                $data['total'] = null;
-
-                return $data;
-            }
-        );
-
-        return $this->sendResponse(
-            $payload,
-            'Properties retrieved successfully.'
-        );
-    }
-
-    /**
-     * Store a newly created property.
-     */
-    public function store(Request $request): JsonResponse
-    {
-        $validator = Validator::make($request->all(), [
-            'title' => ['required', 'string', 'max:255'],
-            'image' => ['nullable', 'string'],
-            'price' => ['nullable', 'numeric', 'min:0'],
-            'address' => ['required', 'string', 'max:255'],
-            'location' => ['nullable', 'string', 'max:255'],
-            'units' => ['required', 'integer', 'min:0'],
-            'occupancy' => ['nullable', 'integer', 'min:0', 'max:100'],
-            'status' => [
-                'nullable',
-                'string',
-                'in:available,fully_booked,inactive',
-            ],
-            'description' => ['nullable', 'string'],
-            'is_favorite' => ['nullable', 'boolean'],
-            'href' => [
-                'nullable',
-                'string',
-                'max:255',
-                'unique:properties,href',
-            ],
-        ]);
-
-        if ($validator->fails()) {
-            return $this->sendError(
-                'Validation Error.',
-                $validator->errors(),
-                422
-            );
-        }
-
-        $data = $validator->validated();
-
-        $occupancy =
-            array_key_exists('occupancy', $data) &&
-            $data['occupancy'] !== null
-                ? (int) $data['occupancy']
-                : 0;
-
-        $description =
-            array_key_exists('description', $data) &&
-            trim((string) $data['description']) !== ''
-                ? trim((string) $data['description'])
-                : null;
-
-        $data['slug'] = $this->generateUniqueSlug($data['title']);
-
-        if (!filled($data['status'] ?? null)) {
-            $data['status'] = $occupancy >= 100
-                ? 'fully_booked'
-                : 'available';
-        }
-
-        $property = Property::create([
-            'title' => trim((string) $data['title']),
-            'slug' => $data['slug'],
-            'href' => $data['href'] ?? null,
-            'image' => $data['image'] ?? null,
-            'price' => $data['price'] ?? null,
-            'address' => trim((string) $data['address']),
-            'location' =>
-                isset($data['location']) &&
-                trim((string) $data['location']) !== ''
-                    ? trim((string) $data['location'])
-                    : null,
-            'units' => (int) $data['units'],
-            'occupancy' => $occupancy,
-            'status' => $data['status'],
-            'description' => $description,
-            'is_favorite' => (bool) ($data['is_favorite'] ?? false),
-        ]);
-
-        if (blank($property->href)) {
-            $property->href = '/dashboard/properties/' . $property->id;
-            $property->save();
-        }
-
-        $this->invalidatePropertyListCache();
-
-        return $this->sendResponse(
-            $this->transformProperty($property->fresh()),
-            'Property created successfully.'
-        );
-    }
-
-    /**
-     * Display one property.
-     */
-    public function show(int|string $id): JsonResponse
-    {
-        $property = Property::query()
+        $query = DB::table('properties')
             ->select([
                 'id',
                 'title',
@@ -275,12 +66,175 @@ class PropertyController extends BaseController
                 'units',
                 'occupancy',
                 'status',
-                'description',
                 'is_favorite',
-                'created_at',
-                'updated_at',
-            ])
-            ->find($id);
+            ]);
+
+        if ($search !== '') {
+            $query->where(function ($searchQuery) use ($search) {
+                if (ctype_digit($search)) {
+                    $searchQuery->where('id', (int) $search);
+                    return;
+                }
+
+                $like = '%' . $search . '%';
+
+                $searchQuery
+                    ->where('title', 'like', $like)
+                    ->orWhere('address', 'like', $like)
+                    ->orWhere('location', 'like', $like)
+                    ->orWhere('slug', 'like', $like);
+            });
+        }
+
+        if ($status !== '' && strtolower($status) !== 'all') {
+            $query->where('status', $status);
+        }
+
+        if ($location !== '' && strtolower($location) !== 'all') {
+            $query->where('location', 'like', '%' . $location . '%');
+        }
+
+        /*
+         * Fetch one extra row. If it exists, there is another page.
+         * This avoids Laravel's expensive total COUNT(*) query.
+         */
+        $rows = $query
+            ->orderByDesc('id')
+            ->offset($offset)
+            ->limit($perPage + 1)
+            ->get();
+
+        $hasMore = $rows->count() > $perPage;
+        $rows = $rows->take($perPage)->values();
+
+        $properties = $rows->map(function (object $property): array {
+            $occupancy = (int) ($property->occupancy ?? 0);
+
+            return [
+                'id' => (int) $property->id,
+                'title' => (string) $property->title,
+                'slug' => $property->slug,
+                'href' => $property->href
+                    ?: '/dashboard/properties/' . $property->id,
+                'image' => $property->image,
+                'price' => $property->price !== null
+                    ? (float) $property->price
+                    : null,
+                'address' => (string) ($property->address ?? ''),
+                'location' => $property->location,
+                'units' => (int) ($property->units ?? 0),
+                'occupancy' => $occupancy,
+                'status' => $property->status
+                    ?: ($occupancy >= 100 ? 'fully_booked' : 'available'),
+                'is_favorite' => (bool) ($property->is_favorite ?? false),
+            ];
+        })->all();
+
+        $count = count($properties);
+        $from = $count > 0 ? $offset + 1 : 0;
+        $to = $count > 0 ? $offset + $count : 0;
+
+        return $this->sendResponse([
+            'current_page' => $page,
+            'data' => $properties,
+            'from' => $from,
+            'to' => $to,
+            'per_page' => $perPage,
+            'has_more' => $hasMore,
+            'last_page' => $hasMore ? $page + 1 : $page,
+            'next_page_url' => $hasMore
+                ? $request->fullUrlWithQuery(['page' => $page + 1])
+                : null,
+            'prev_page_url' => $page > 1
+                ? $request->fullUrlWithQuery(['page' => $page - 1])
+                : null,
+
+            /*
+             * Total is intentionally null because calculating the exact total
+             * requires another COUNT(*) query.
+             */
+            'total' => null,
+        ], 'Properties retrieved successfully.');
+    }
+
+    /**
+     * Store a newly created property.
+     */
+    public function store(Request $request)
+    {
+        /**
+         * Important:
+         * Occupancy and description are now optional because they were removed
+         * from the Add Property popup.
+         */
+        $validator = Validator::make($request->all(), [
+            'title' => 'required|string|max:255',
+            'image' => 'nullable|string',
+            'price' => 'nullable|numeric|min:0',
+            'address' => 'required|string|max:255',
+            'location' => 'nullable|string|max:255',
+            'units' => 'required|integer|min:0',
+            'occupancy' => 'nullable|integer|min:0|max:100',
+            'status' => 'nullable|string|in:available,fully_booked,inactive',
+            'description' => 'nullable|string',
+            'is_favorite' => 'nullable|boolean',
+            'href' => 'nullable|string|max:255|unique:properties,href',
+        ]);
+
+        if ($validator->fails()) {
+            return $this->sendError('Validation Error.', $validator->errors(), 422);
+        }
+
+        $data = $validator->validated();
+
+        $occupancy = array_key_exists('occupancy', $data) && $data['occupancy'] !== null
+            ? (int) $data['occupancy']
+            : 0;
+
+        $description = array_key_exists('description', $data) && trim((string) $data['description']) !== ''
+            ? trim((string) $data['description'])
+            : null;
+
+        $data['slug'] = $this->generateUniqueSlug($data['title']);
+
+        if (!isset($data['status']) || empty($data['status'])) {
+            $data['status'] = $occupancy >= 100 ? 'fully_booked' : 'available';
+        }
+
+        $property = Property::create([
+            'title' => trim((string) $data['title']),
+            'slug' => $data['slug'],
+            'href' => $data['href'] ?? null,
+            'image' => $data['image'] ?? null,
+            'price' => $data['price'] ?? null,
+            'address' => trim((string) $data['address']),
+            'location' => isset($data['location']) && trim((string) $data['location']) !== ''
+                ? trim((string) $data['location'])
+                : null,
+            'units' => (int) $data['units'],
+            'occupancy' => $occupancy,
+            'status' => $data['status'],
+            'description' => $description,
+            'is_favorite' => (bool) ($data['is_favorite'] ?? false),
+        ]);
+
+        if (empty($property->href)) {
+            $property->href = '/dashboard/properties/' . $property->id;
+            $property->save();
+        }
+
+        return $this->sendResponse(
+            $this->transformProperty($property->fresh()),
+            'Property created successfully.'
+        );
+    }
+
+    /**
+     * Display the specified property.
+     */
+    public function show($id)
+    {
+        $property = Property::find($id);
 
         if (!$property) {
             return $this->sendError('Property not found.');
@@ -293,9 +247,9 @@ class PropertyController extends BaseController
     }
 
     /**
-     * Update one property.
+     * Update the specified property.
      */
-    public function update(Request $request, int|string $id): JsonResponse
+    public function update(Request $request, $id)
     {
         $property = Property::find($id);
 
@@ -303,45 +257,34 @@ class PropertyController extends BaseController
             return $this->sendError('Property not found.');
         }
 
+        /**
+         * Important:
+         * Occupancy and description are optional.
+         * If they are not sent, we do not force validation error.
+         */
         $validator = Validator::make($request->all(), [
-            'title' => ['sometimes', 'required', 'string', 'max:255'],
-            'image' => ['nullable', 'string'],
-            'price' => ['sometimes', 'nullable', 'numeric', 'min:0'],
-            'address' => ['sometimes', 'required', 'string', 'max:255'],
-            'location' => ['nullable', 'string', 'max:255'],
-            'units' => ['sometimes', 'required', 'integer', 'min:0'],
-            'occupancy' => ['nullable', 'integer', 'min:0', 'max:100'],
-            'status' => [
-                'nullable',
-                'string',
-                'in:available,fully_booked,inactive',
-            ],
-            'description' => ['nullable', 'string'],
-            'is_favorite' => ['nullable', 'boolean'],
-            'href' => [
-                'nullable',
-                'string',
-                'max:255',
-                'unique:properties,href,' . $property->id,
-            ],
+            'title' => 'sometimes|required|string|max:255',
+            'image' => 'nullable|string',
+            'price' => 'sometimes|nullable|numeric|min:0',
+            'address' => 'sometimes|required|string|max:255',
+            'location' => 'nullable|string|max:255',
+            'units' => 'sometimes|required|integer|min:0',
+            'occupancy' => 'nullable|integer|min:0|max:100',
+            'status' => 'nullable|string|in:available,fully_booked,inactive',
+            'description' => 'nullable|string',
+            'is_favorite' => 'nullable|boolean',
+            'href' => 'nullable|string|max:255|unique:properties,href,' . $property->id,
         ]);
 
         if ($validator->fails()) {
-            return $this->sendError(
-                'Validation Error.',
-                $validator->errors(),
-                422
-            );
+            return $this->sendError('Validation Error.', $validator->errors(), 422);
         }
 
         $data = $validator->validated();
 
-        if (array_key_exists('title', $data) && filled($data['title'])) {
+        if (array_key_exists('title', $data) && !empty($data['title'])) {
             $data['title'] = trim((string) $data['title']);
-            $data['slug'] = $this->generateUniqueSlug(
-                $data['title'],
-                (int) $property->id
-            );
+            $data['slug'] = $this->generateUniqueSlug($data['title'], $property->id);
         }
 
         if (array_key_exists('address', $data)) {
@@ -349,13 +292,15 @@ class PropertyController extends BaseController
         }
 
         if (array_key_exists('location', $data)) {
-            $value = trim((string) ($data['location'] ?? ''));
-            $data['location'] = $value !== '' ? $value : null;
+            $data['location'] = trim((string) ($data['location'] ?? '')) !== ''
+                ? trim((string) $data['location'])
+                : null;
         }
 
         if (array_key_exists('description', $data)) {
-            $value = trim((string) ($data['description'] ?? ''));
-            $data['description'] = $value !== '' ? $value : null;
+            $data['description'] = trim((string) ($data['description'] ?? '')) !== ''
+                ? trim((string) $data['description'])
+                : null;
         }
 
         if (array_key_exists('occupancy', $data)) {
@@ -363,13 +308,8 @@ class PropertyController extends BaseController
                 ? 0
                 : (int) $data['occupancy'];
 
-            if (
-                !array_key_exists('status', $data) &&
-                $property->status !== 'inactive'
-            ) {
-                $data['status'] = $data['occupancy'] >= 100
-                    ? 'fully_booked'
-                    : 'available';
+            if (!array_key_exists('status', $data) && $property->status !== 'inactive') {
+                $data['status'] = $data['occupancy'] >= 100 ? 'fully_booked' : 'available';
             }
         }
 
@@ -383,12 +323,10 @@ class PropertyController extends BaseController
 
         $property->update($data);
 
-        if (blank($property->href)) {
+        if (empty($property->href)) {
             $property->href = '/dashboard/properties/' . $property->id;
             $property->save();
         }
-
-        $this->invalidatePropertyListCache();
 
         return $this->sendResponse(
             $this->transformProperty($property->fresh()),
@@ -397,9 +335,9 @@ class PropertyController extends BaseController
     }
 
     /**
-     * Delete one property.
+     * Remove the specified property.
      */
-    public function destroy(int|string $id): JsonResponse
+    public function destroy($id)
     {
         $property = Property::find($id);
 
@@ -408,27 +346,23 @@ class PropertyController extends BaseController
         }
 
         $property->delete();
-        $this->invalidatePropertyListCache();
 
         return $this->sendResponse([], 'Property deleted successfully.');
     }
 
     /**
-     * Convert the model to the lightweight frontend card structure.
+     * Convert model to frontend-friendly structure.
      */
     private function transformProperty(Property $property): array
     {
         return [
-            'id' => (int) $property->id,
-            'title' => (string) $property->title,
+            'id' => $property->id,
+            'title' => $property->title,
             'slug' => $property->slug,
-            'href' => $property->href
-                ?: '/dashboard/properties/' . $property->id,
+            'href' => $property->href ?: '/dashboard/properties/' . $property->id,
             'image' => $property->image,
-            'price' => $property->price !== null
-                ? (float) $property->price
-                : null,
-            'address' => (string) $property->address,
+            'price' => $property->price !== null ? (float) $property->price : null,
+            'address' => $property->address,
             'location' => $property->location,
             'units' => (int) ($property->units ?? 0),
             'occupancy' => (int) ($property->occupancy ?? 0),
@@ -441,28 +375,10 @@ class PropertyController extends BaseController
     }
 
     /**
-     * Increase the list cache version instead of scanning and deleting keys.
+     * Generate unique slug.
      */
-    private function invalidatePropertyListCache(): void
+    private function generateUniqueSlug(string $title, ?int $ignoreId = null): string
     {
-        $currentVersion = (int) Cache::get(
-            self::LIST_CACHE_VERSION_KEY,
-            1
-        );
-
-        Cache::forever(
-            self::LIST_CACHE_VERSION_KEY,
-            $currentVersion + 1
-        );
-    }
-
-    /**
-     * Generate a unique property slug.
-     */
-    private function generateUniqueSlug(
-        string $title,
-        ?int $ignoreId = null
-    ): string {
         $baseSlug = Str::slug($title);
 
         if ($baseSlug === '') {
@@ -473,18 +389,20 @@ class PropertyController extends BaseController
         $counter = 1;
 
         while (true) {
-            $query = Property::query()->where('slug', $slug);
+            $query = Property::where('slug', $slug);
 
-            if ($ignoreId !== null) {
+            if ($ignoreId) {
                 $query->where('id', '!=', $ignoreId);
             }
 
             if (!$query->exists()) {
-                return $slug;
+                break;
             }
 
             $slug = $baseSlug . '-' . $counter;
             $counter++;
         }
+
+        return $slug;
     }
 }
