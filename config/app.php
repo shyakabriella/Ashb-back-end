@@ -4,132 +4,54 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Application Name
+    | Third Party Services
     |--------------------------------------------------------------------------
     |
-    | This value is the name of your application, which will be used when the
-    | framework needs to place the application's name in a notification or
-    | other UI elements where an application name needs to be displayed.
+    | This file stores configuration for third-party services such as
+    | Postmark, Resend, Amazon SES, Slack, and Gemini.
+    |
+    | Secret values must remain in the Laravel .env file.
     |
     */
 
-    'name' => env('APP_NAME', 'Laravel'),
+    'postmark' => [
+        'token' => env('POSTMARK_TOKEN'),
+    ],
 
-    /*
-    |--------------------------------------------------------------------------
-    | Application Environment
-    |--------------------------------------------------------------------------
-    |
-    | This value determines the environment your application is currently
-    | running in.
-    |
-    */
+    'resend' => [
+        'key' => env('RESEND_KEY'),
+    ],
 
-    'env' => env('APP_ENV', 'production'),
+    'ses' => [
+        'key' => env('AWS_ACCESS_KEY_ID'),
+        'secret' => env('AWS_SECRET_ACCESS_KEY'),
+        'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
+    ],
 
-    /*
-    |--------------------------------------------------------------------------
-    | Application Debug Mode
-    |--------------------------------------------------------------------------
-    |
-    | When your application is in debug mode, detailed error messages with
-    | stack traces will be shown.
-    |
-    */
-
-    'debug' => (bool) env('APP_DEBUG', false),
-
-    /*
-    |--------------------------------------------------------------------------
-    | Application URL
-    |--------------------------------------------------------------------------
-    |
-    | This should be the URL used to access the Laravel backend.
-    |
-    */
-
-    'url' => env('APP_URL', 'http://localhost'),
-
-    /*
-    |--------------------------------------------------------------------------
-    | Frontend URLs
-    |--------------------------------------------------------------------------
-    |
-    | These URLs are used when Laravel sends password setup and password
-    | reset emails. The user will be redirected to the Next.js frontend.
-    |
-    */
-
-    'frontend_reset_password_url' => env(
-        'FRONTEND_RESET_PASSWORD_URL',
-        'http://localhost:3000/reset-password'
-    ),
-
-    'frontend_login_url' => env(
-        'FRONTEND_LOGIN_URL',
-        'http://localhost:3000/login'
-    ),
-
-    /*
-    |--------------------------------------------------------------------------
-    | Application Timezone
-    |--------------------------------------------------------------------------
-    |
-    | Here you may specify the default timezone for your application.
-    |
-    */
-
-    'timezone' => env('APP_TIMEZONE', 'Africa/Kigali'),
-
-    /*
-    |--------------------------------------------------------------------------
-    | Application Locale Configuration
-    |--------------------------------------------------------------------------
-    |
-    | The application locale determines the default locale used by Laravel.
-    |
-    */
-
-    'locale' => env('APP_LOCALE', 'en'),
-
-    'fallback_locale' => env('APP_FALLBACK_LOCALE', 'en'),
-
-    'faker_locale' => env('APP_FAKER_LOCALE', 'en_US'),
-
-    /*
-    |--------------------------------------------------------------------------
-    | Encryption Key
-    |--------------------------------------------------------------------------
-    |
-    | This key is used by Laravel's encryption services.
-    |
-    */
-
-    'cipher' => 'AES-256-CBC',
-
-    'key' => env('APP_KEY'),
-
-    'previous_keys' => [
-        ...array_filter(
-            explode(',', (string) env('APP_PREVIOUS_KEYS', ''))
-        ),
+    'slack' => [
+        'notifications' => [
+            'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),
+            'channel' => env('SLACK_BOT_USER_DEFAULT_CHANNEL'),
+        ],
     ],
 
     /*
     |--------------------------------------------------------------------------
-    | Maintenance Mode Driver
+    | Google Gemini AI
     |--------------------------------------------------------------------------
     |
-    | These configuration options determine the driver used for maintenance
-    | mode.
+    | Used by the task creation page to organize a rough task idea into:
+    | - Task name
+    | - Milestone
+    | - Description
     |
-    | Supported drivers: "file", "cache"
+    | Keep GEMINI_API_KEY only in the Laravel .env file.
     |
     */
 
-    'maintenance' => [
-        'driver' => env('APP_MAINTENANCE_DRIVER', 'file'),
-        'store' => env('APP_MAINTENANCE_STORE', 'database'),
+    'gemini' => [
+        'key' => env('GEMINI_API_KEY'),
+        'model' => env('GEMINI_MODEL', 'gemini-2.5-flash'),
     ],
 
 ];
