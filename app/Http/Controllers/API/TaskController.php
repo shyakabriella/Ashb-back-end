@@ -216,8 +216,9 @@ class TaskController extends Controller
      * List tasks.
      * - Employee/Intern sees only assigned tasks
      * - CEO/MD/Chief Market/Admin sees all tasks
-     * - Only lightweight list relations are returned
-     * - Search and status filters run before pagination
+     * - all=1 returns every matching lightweight task in one response
+     * - Normal pagination remains available for other pages
+     * - Search and status filters run before loading records
      */
     public function index(Request $request): JsonResponse
     {
@@ -233,7 +234,9 @@ class TaskController extends Controller
         $validated = $request->validate([
             'from_date' => ['nullable', 'date'],
             'to_date' => ['nullable', 'date'],
-            'per_page' => ['nullable', 'integer', 'min:1', 'max:50'],
+            'all' => ['nullable', 'boolean'],
+            'include_comment_counts' => ['nullable', 'boolean'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:500'],
             'search' => ['nullable', 'string', 'max:150'],
             'status' => ['nullable', Rule::in($this->allowedStatuses())],
             'property_id' => ['nullable', 'integer', 'exists:properties,id'],
@@ -303,78 +306,77 @@ class TaskController extends Controller
             });
         }
 
-        $perPage = max(1, min((int) ($validated['per_page'] ?? 15), 50));
+        $query
+            ->orderByDesc('tasks.start_at')
+            ->orderByDesc('tasks.id');
+
+        $loadAll = (bool) ($validated['all'] ?? false);
+        $includeCommentCounts = (bool) ($validated['include_comment_counts'] ?? true);
 
         /*
-         * The main task query contains no reward or comment subqueries.
-         * simplePaginate() also avoids the expensive total COUNT(*) query.
+         * Optimized all mode:
+         * The employee-grouped table needs the complete matching result set.
+         * Returning it once is faster than making dozens of 50-row requests,
+         * and new tasks from another employee can no longer push older tasks
+         * out of the currently loaded frontend page.
+         *
+         * The payload remains lightweight because taskListRelations() excludes
+         * descriptions, update history, attachments and full reward history.
+         */
+        if ($loadAll) {
+            $tasks = $this->decorateTaskList(
+                $query->get(),
+                $includeCommentCounts
+            );
+            $total = $tasks->count();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'All matching tasks fetched successfully.',
+                'data' => [
+                    'current_page' => 1,
+                    'data' => $tasks->values(),
+                    'from' => $total > 0 ? 1 : 0,
+                    'last_page' => 1,
+                    'next_page_url' => null,
+                    'per_page' => $total,
+                    'prev_page_url' => null,
+                    'to' => $total,
+                    'total' => $total,
+                    'has_more' => false,
+                    'load_mode' => 'all',
+                ],
+                'meta' => [
+                    'from_date' => $fromDate->toDateString(),
+                    'to_date' => $toDate->toDateString(),
+                    'period' => 'previous_and_current_month_live',
+                    'load_mode' => 'all',
+                    'filters' => [
+                        'search' => $search !== '' ? $search : null,
+                        'status' => $validated['status'] ?? null,
+                        'property_id' => isset($validated['property_id'])
+                            ? (int) $validated['property_id']
+                            : null,
+                    ],
+                ],
+            ]);
+        }
+
+        $perPage = max(1, min((int) ($validated['per_page'] ?? 50), 500));
+
+        /*
+         * Normal paginated mode remains available for mobile or other screens
+         * that do not need every matching task at once.
          */
         $tasks = $query
-            ->orderByDesc('tasks.start_at')
-            ->orderByDesc('tasks.id')
             ->simplePaginate($perPage)
             ->withQueryString();
 
-        $taskIds = $tasks->getCollection()
-            ->pluck('id')
-            ->map(fn ($id) => (int) $id)
-            ->filter()
-            ->values();
-
-        $commentCounts = collect();
-
-        if ($taskIds->isNotEmpty() && Schema::hasTable('task_updates')) {
-            $commentCounts = DB::table('task_updates')
-                ->whereIn('task_id', $taskIds->all())
-                ->selectRaw('task_id, COUNT(*) as comments_count')
-                ->groupBy('task_id')
-                ->pluck('comments_count', 'task_id');
-        }
-
-        $latestRewards = collect();
-
-        if ($taskIds->isNotEmpty() && $this->rewardTableReady()) {
-            $latestRewardIds = DB::table('task_rewards')
-                ->whereIn('task_id', $taskIds->all())
-                ->selectRaw('MAX(id)')
-                ->groupBy('task_id');
-
-            $latestRewards = DB::table('task_rewards')
-                ->whereIn('id', $latestRewardIds)
-                ->get([
-                    'id',
-                    'task_id',
-                    'ranking',
-                    'grading',
-                    'marks_percentage',
-                    'created_at',
-                ])
-                ->keyBy('task_id');
-        }
-
         $tasks->setCollection(
-            $tasks->getCollection()->map(function (Task $task) use (
-                $commentCounts,
-                $latestRewards
-            ) {
-                $taskId = (int) $task->id;
-                $latestReward = $latestRewards->get($taskId);
-
-                $task->setAttribute(
-                    'comments_count',
-                    (int) ($commentCounts->get($taskId) ?? 0)
-                );
-
-                $task->setAttribute('is_rewarded', $latestReward !== null);
-                $task->setAttribute('ranking', $latestReward->ranking ?? null);
-                $task->setAttribute('grading', $latestReward->grading ?? null);
-                $task->setAttribute(
-                    'marks_percentage',
-                    $latestReward->marks_percentage ?? null
-                );
-
-                return $task;
-            })
+            $this->decorateTaskList(
+                $tasks->getCollection(),
+                $includeCommentCounts
+            )
         );
 
         $taskData = $tasks->toArray();
@@ -383,6 +385,7 @@ class TaskController extends Controller
             ? $tasks->currentPage() + 1
             : $tasks->currentPage();
         $taskData['total'] = null;
+        $taskData['load_mode'] = 'paginated';
 
         return response()->json([
             'success' => true,
@@ -392,6 +395,7 @@ class TaskController extends Controller
                 'from_date' => $fromDate->toDateString(),
                 'to_date' => $toDate->toDateString(),
                 'period' => 'previous_and_current_month_live',
+                'load_mode' => 'paginated',
                 'filters' => [
                     'search' => $search !== '' ? $search : null,
                     'status' => $validated['status'] ?? null,
@@ -401,6 +405,101 @@ class TaskController extends Controller
                 ],
             ],
         ]);
+    }
+
+    /**
+     * Add lightweight comment and latest reward information to task rows.
+     *
+     * IDs are processed in chunks so all-mode remains safe when the table has
+     * thousands of tasks and does not create one enormous WHERE IN statement.
+     */
+    private function decorateTaskList(
+        Collection $tasks,
+        bool $includeCommentCounts = true
+    ): Collection
+    {
+        if ($tasks->isEmpty()) {
+            return $tasks;
+        }
+
+        $taskIds = $tasks
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn ($id) => $id > 0)
+            ->unique()
+            ->values();
+
+        $commentCounts = collect();
+
+        if (
+            $includeCommentCounts &&
+            $taskIds->isNotEmpty() &&
+            Schema::hasTable('task_updates')
+        ) {
+            foreach ($taskIds->chunk(1000) as $taskIdChunk) {
+                $rows = DB::table('task_updates')
+                    ->whereIn('task_id', $taskIdChunk->all())
+                    ->selectRaw('task_id, COUNT(*) as comments_count')
+                    ->groupBy('task_id')
+                    ->get();
+
+                foreach ($rows as $row) {
+                    $commentCounts->put(
+                        (int) $row->task_id,
+                        (int) $row->comments_count
+                    );
+                }
+            }
+        }
+
+        $latestRewards = collect();
+
+        if ($taskIds->isNotEmpty() && $this->rewardTableReady()) {
+            foreach ($taskIds->chunk(1000) as $taskIdChunk) {
+                $latestRewardIds = DB::table('task_rewards')
+                    ->whereIn('task_id', $taskIdChunk->all())
+                    ->selectRaw('MAX(id)')
+                    ->groupBy('task_id');
+
+                $rows = DB::table('task_rewards')
+                    ->whereIn('id', $latestRewardIds)
+                    ->get([
+                        'id',
+                        'task_id',
+                        'ranking',
+                        'grading',
+                        'marks_percentage',
+                        'created_at',
+                    ]);
+
+                foreach ($rows as $row) {
+                    $latestRewards->put((int) $row->task_id, $row);
+                }
+            }
+        }
+
+        return $tasks->map(function (Task $task) use (
+            $commentCounts,
+            $latestRewards
+        ) {
+            $taskId = (int) $task->id;
+            $latestReward = $latestRewards->get($taskId);
+
+            $task->setAttribute(
+                'comments_count',
+                (int) ($commentCounts->get($taskId) ?? 0)
+            );
+
+            $task->setAttribute('is_rewarded', $latestReward !== null);
+            $task->setAttribute('ranking', $latestReward->ranking ?? null);
+            $task->setAttribute('grading', $latestReward->grading ?? null);
+            $task->setAttribute(
+                'marks_percentage',
+                $latestReward->marks_percentage ?? null
+            );
+
+            return $task;
+        });
     }
 
     /**
