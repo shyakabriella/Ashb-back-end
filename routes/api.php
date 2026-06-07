@@ -48,6 +48,23 @@ Route::get(
 
 /*
 |--------------------------------------------------------------------------
+| Public property image route
+|--------------------------------------------------------------------------
+|
+| Property cards use normal <img> requests, which cannot attach the Bearer
+| token stored by the dashboard. Only the image file is public; property
+| management and property data routes remain protected by Sanctum.
+|
+| Keep this route before Route::apiResource('properties', ...).
+*/
+
+Route::get(
+    'property-images/{property}',
+    [PropertyController::class, 'image']
+)->whereNumber('property');
+
+/*
+|--------------------------------------------------------------------------
 | Protected routes
 |--------------------------------------------------------------------------
 */

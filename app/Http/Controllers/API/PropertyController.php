@@ -13,11 +13,15 @@ use Illuminate\Validation\ValidationException;
 class PropertyController extends BaseController
 {
     /**
-     * Display a lightweight, paginated property list.
+     * Display a lightweight paginated property list.
      *
-     * The image column is returned exactly as stored in the database so the
-     * property cards and the property details page use the same real image.
-     * Description and timestamps remain excluded from the list response.
+     * Important performance rule:
+     * The database image value is NOT selected for the list response. Legacy
+     * records may contain multi-megabyte base64 strings, and returning several
+     * of them inside one JSON response causes production timeouts.
+     *
+     * Each card receives a small public image endpoint instead. The browser
+     * loads images separately and lazily after the property data is displayed.
      */
     public function index(Request $request)
     {
@@ -43,7 +47,6 @@ class PropertyController extends BaseController
                 'title',
                 'slug',
                 'href',
-                'image',
                 'price',
                 'address',
                 'location',
@@ -51,7 +54,11 @@ class PropertyController extends BaseController
                 'occupancy',
                 'status',
                 'is_favorite',
+                'updated_at',
             ])
+            ->selectRaw(
+                "CASE WHEN image IS NULL OR image = '' THEN 0 ELSE 1 END AS has_image"
+            )
             ->orderByDesc('id');
 
         if ($request->filled('search')) {
@@ -108,6 +115,62 @@ class PropertyController extends BaseController
             $properties,
             'Properties retrieved successfully.'
         );
+    }
+
+    /**
+     * Serve the real database image separately from the property JSON list.
+     *
+     * This route is public because a normal <img> request cannot attach the
+     * dashboard Bearer token. Property cover images are public assets.
+     *
+     * Legacy base64 records are converted to Laravel public storage the first
+     * time the image is requested. Later requests are streamed from storage.
+     */
+    public function image(Property $property)
+    {
+        $value = trim((string) $property->image);
+
+        if ($value === '') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Property image not found.',
+            ], 404);
+        }
+
+        if (Str::startsWith($value, 'data:image/')) {
+            $storedPath = $this->convertLegacyBase64Image($property, $value);
+
+            if ($storedPath === null) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'The stored property image is invalid.',
+                ], 422);
+            }
+
+            return $this->publicStorageImageResponse($storedPath);
+        }
+
+        $storagePath = $this->extractPublicStoragePath($value);
+
+        if (
+            $storagePath !== null &&
+            Storage::disk('public')->exists($storagePath)
+        ) {
+            return $this->publicStorageImageResponse($storagePath);
+        }
+
+        if (Str::startsWith($value, ['http://', 'https://'])) {
+            return redirect()
+                ->away($value)
+                ->withHeaders([
+                    'Cache-Control' => 'public, max-age=3600',
+                ]);
+        }
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Property image file not found.',
+        ], 404);
     }
 
     /**
@@ -335,14 +398,26 @@ class PropertyController extends BaseController
         Property $property,
         bool $forList = false
     ): array {
+        $hasImage = $forList
+            ? (bool) $property->getAttribute('has_image')
+            : trim((string) $property->image) !== '';
+
+        $imageUrl = $hasImage
+            ? $this->propertyImageEndpoint($property)
+            : null;
+
         $response = [
             'id' => $property->id,
             'title' => $property->title,
             'slug' => $property->slug,
             'href' => $property->href
                 ?: '/dashboard/properties/' . $property->id,
-            'image' => $property->image,
-            'image_url' => $this->resolvePropertyImageUrl($property->image),
+            'image' => $forList
+                ? null
+                : $this->resolvePropertyImageUrl($property->image),
+            'image_url' => $forList
+                ? $imageUrl
+                : $this->resolvePropertyImageUrl($property->image),
             'price' => $property->price !== null
                 ? (float) $property->price
                 : null,
@@ -361,6 +436,116 @@ class PropertyController extends BaseController
         }
 
         return $response;
+    }
+
+    /**
+     * Return the small public endpoint used by property cards.
+     */
+    private function propertyImageEndpoint(Property $property): string
+    {
+        $version = optional($property->updated_at)->timestamp
+            ?: time();
+
+        return '/api/property-images/' . $property->id . '?v=' . $version;
+    }
+
+    /**
+     * Convert a legacy database base64 image to a public-storage file once.
+     */
+    private function convertLegacyBase64Image(
+        Property $property,
+        string $dataUrl
+    ): ?string {
+        if (!preg_match(
+            '/^data:image\/(jpeg|jpg|png|webp|gif);base64,(.+)$/s',
+            $dataUrl,
+            $matches
+        )) {
+            return null;
+        }
+
+        $extension = strtolower($matches[1]);
+        $extension = $extension === 'jpeg' ? 'jpg' : $extension;
+
+        $decodedImage = base64_decode(
+            preg_replace('/\s+/', '', $matches[2]),
+            true
+        );
+
+        if ($decodedImage === false || $decodedImage === '') {
+            return null;
+        }
+
+        $relativePath = 'properties/property-' .
+            $property->id . '-' .
+            substr(sha1($decodedImage), 0, 20) .
+            '.' . $extension;
+
+        if (!Storage::disk('public')->exists($relativePath)) {
+            $saved = Storage::disk('public')->put(
+                $relativePath,
+                $decodedImage
+            );
+
+            if (!$saved) {
+                return null;
+            }
+        }
+
+        $property->forceFill([
+            'image' => $relativePath,
+        ])->saveQuietly();
+
+        return $relativePath;
+    }
+
+    /**
+     * Stream one public-storage image with browser caching enabled.
+     */
+    private function publicStorageImageResponse(string $path)
+    {
+        return Storage::disk('public')->response(
+            $path,
+            basename($path),
+            [
+                'Cache-Control' => 'public, max-age=86400, immutable',
+                'X-Content-Type-Options' => 'nosniff',
+            ],
+            'inline'
+        );
+    }
+
+    /**
+     * Extract a Laravel public-disk path from a stored path or local URL.
+     */
+    private function extractPublicStoragePath(?string $image): ?string
+    {
+        $value = trim((string) $image);
+
+        if ($value === '' || Str::startsWith($value, 'data:image/')) {
+            return null;
+        }
+
+        $urlPath = parse_url($value, PHP_URL_PATH);
+        $normalized = is_string($urlPath) && $urlPath !== ''
+            ? $urlPath
+            : $value;
+
+        $normalized = str_replace('\\', '/', $normalized);
+        $normalized = ltrim($normalized, '/');
+
+        foreach ([
+            'storage/app/public/',
+            'public/storage/',
+            'storage/',
+        ] as $prefix) {
+            if (Str::startsWith($normalized, $prefix)) {
+                $normalized = Str::after($normalized, $prefix);
+                break;
+            }
+        }
+
+        return $normalized !== '' ? $normalized : null;
     }
 
     /**
@@ -426,11 +611,7 @@ class PropertyController extends BaseController
             ]);
         }
 
-        $storageUrl = Storage::disk('public')->url($relativePath);
-
-        return Str::startsWith($storageUrl, ['http://', 'https://'])
-            ? $storageUrl
-            : url($storageUrl);
+        return $relativePath;
     }
 
     /**
