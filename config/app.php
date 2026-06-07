@@ -7,10 +7,8 @@ return [
     | Third Party Services
     |--------------------------------------------------------------------------
     |
-    | This file stores configuration for third-party services such as
-    | Postmark, Resend, Amazon SES, Slack, and Gemini.
-    |
-    | Secret values must remain in the Laravel .env file.
+    | This file stores configuration values for third-party services.
+    | Secret values must be placed in the Laravel .env file.
     |
     */
 
@@ -40,18 +38,25 @@ return [
     | Google Gemini AI
     |--------------------------------------------------------------------------
     |
-    | Used by the task creation page to organize a rough task idea into:
-    | - Task name
-    | - Milestone
-    | - Description
+    | Used by task creation to organize a rough task idea into a professional
+    | task name, milestone, and description.
     |
-    | Keep GEMINI_API_KEY only in the Laravel .env file.
+    | The API key stays securely in the backend .env file.
     |
     */
 
     'gemini' => [
         'key' => env('GEMINI_API_KEY'),
         'model' => env('GEMINI_MODEL', 'gemini-2.5-flash'),
+        'temperature' => (float) env('GEMINI_TEMPERATURE', 0.3),
+        'max_output_tokens' => (int) env(
+            'GEMINI_MAX_OUTPUT_TOKENS',
+            800
+        ),
+        'enabled' => filter_var(
+            env('GEMINI_USE_AI', true),
+            FILTER_VALIDATE_BOOLEAN
+        ),
     ],
 
 ];
