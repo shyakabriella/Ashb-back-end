@@ -30,4 +30,10 @@ class Property extends Model
         'occupancy' => 'integer',
         'is_favorite' => 'boolean',
     ];
+
+    protected $attributes = [
+        'occupancy' => 0,
+        'status' => 'available',
+        'is_favorite' => false,
+    ];
 }

@@ -59,25 +59,37 @@ class User extends Authenticatable
      */
     public function role(): BelongsTo
     {
-        return $this->belongsTo(Role::class);
+        return $this->belongsTo(Role::class, 'role_id', 'id');
     }
 
     /**
      * User has one profile.
+     *
+     * Important:
+     * One user must only connect to one profile row using user_id.
      */
     public function profile(): HasOne
     {
-        return $this->hasOne(Profile::class);
+        return $this->hasOne(Profile::class, 'user_id', 'id');
     }
 
     /**
      * Tasks assigned to this user.
-     * One user can have one or many tasks.
+     *
+     * One user can have one or many assigned tasks.
      */
     public function assignedTasks(): BelongsToMany
     {
-        return $this->belongsToMany(Task::class, 'task_user', 'user_id', 'task_id')
-            ->withPivot(['assigned_by', 'assigned_at'])
+        return $this->belongsToMany(
+            Task::class,
+            'task_user',
+            'user_id',
+            'task_id'
+        )
+            ->withPivot([
+                'assigned_by',
+                'assigned_at',
+            ])
             ->withTimestamps();
     }
 
@@ -86,7 +98,28 @@ class User extends Authenticatable
      */
     public function createdTasks(): HasMany
     {
-        return $this->hasMany(Task::class, 'created_by');
+        return $this->hasMany(Task::class, 'created_by', 'id');
+    }
+
+    /**
+     * Monthly performance targets assigned to this user.
+     *
+     * One employee or intern can have one target for each month.
+     */
+    public function targets(): HasMany
+    {
+        return $this->hasMany(Target::class, 'user_id', 'id');
+    }
+
+    /**
+     * Salary history assigned to this user.
+     *
+     * One employee or intern can have different salary records
+     * based on the effective month.
+     */
+    public function salaries(): HasMany
+    {
+        return $this->hasMany(Salary::class, 'user_id', 'id');
     }
 
     /**
@@ -94,6 +127,8 @@ class User extends Authenticatable
      */
     public function getFullNameAttribute(): string
     {
-        return trim(($this->first_name ?? '') . ' ' . ($this->last_name ?? ''));
+        return trim(
+            ($this->first_name ?? '') . ' ' . ($this->last_name ?? '')
+        );
     }
 }
