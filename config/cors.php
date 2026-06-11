@@ -17,6 +17,7 @@ return [
     'paths' => [
         'api/*',
         'sanctum/csrf-cookie',
+        '*', // catches all routes, not just api/*
     ],
 
     'allowed_methods' => ['*'],
@@ -36,8 +37,6 @@ return [
         |--------------------------------------------------------------------------
         | Production frontend URLs
         |--------------------------------------------------------------------------
-        | Add the domain where your Next.js / React website is running.
-        |--------------------------------------------------------------------------
         */
         'https://ashbhub.com',
         'https://www.ashbhub.com',
@@ -46,8 +45,6 @@ return [
         |--------------------------------------------------------------------------
         | Dashboard / API domain URLs
         |--------------------------------------------------------------------------
-        | Keep these if you also open frontend/dashboard from these domains.
-        |--------------------------------------------------------------------------
         */
         'https://d.ashbhub.com',
         'https://www.d.ashbhub.com',
@@ -55,8 +52,6 @@ return [
         /*
         |--------------------------------------------------------------------------
         | Optional HTTP versions
-        |--------------------------------------------------------------------------
-        | Only needed if your site sometimes opens without HTTPS.
         |--------------------------------------------------------------------------
         */
         'http://ashbhub.com',
@@ -97,10 +92,9 @@ return [
     | supports_credentials
     |--------------------------------------------------------------------------
     |
-    | false is okay because your public chatbot API does not use cookies.
-    | Keep false unless you are using Sanctum cookie authentication from frontend.
+    | Set to true because Sanctum cookie authentication is used from frontend.
     |
     */
-    'supports_credentials' => false,
+    'supports_credentials' => true,
 
 ];
