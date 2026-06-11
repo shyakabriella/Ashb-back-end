@@ -5,6 +5,7 @@ use App\Http\Controllers\API\ClientController;
 use App\Http\Controllers\API\ProfileController;
 use App\Http\Controllers\API\PropertyController;
 use App\Http\Controllers\API\RegisterController;
+use App\Http\Controllers\API\RoleController;
 use App\Http\Controllers\API\TaskController;
 use App\Http\Controllers\API\TargetController;
 use App\Http\Controllers\API\SalaryController;
@@ -16,7 +17,7 @@ use App\Http\Controllers\API\MonthlyPlanPageController;
 
 /*
 |--------------------------------------------------------------------------
-| Public routes
+| Public authentication routes
 |--------------------------------------------------------------------------
 */
 
@@ -57,6 +58,7 @@ Route::get(
 | management and property data routes remain protected by Sanctum.
 |
 | Keep this route before Route::apiResource('properties', ...).
+|
 */
 
 Route::get(
@@ -89,29 +91,97 @@ Route::middleware('auth:sanctum')->group(function () {
 
     /*
     |--------------------------------------------------------------------------
+    | Role management
+    |--------------------------------------------------------------------------
+    |
+    | Role creation, updating and deletion permissions are also checked
+    | inside RoleController.
+    |
+    */
+
+    Route::controller(RoleController::class)->group(function () {
+        Route::get('roles', 'index');
+        Route::post('roles', 'store');
+
+        /*
+         * The status route must stay before roles/{role}.
+         */
+
+        Route::patch(
+            'roles/{role}/status',
+            'updateStatus'
+        )->whereNumber('role');
+
+        Route::get(
+            'roles/{role}',
+            'show'
+        )->whereNumber('role');
+
+        Route::put(
+            'roles/{role}',
+            'update'
+        )->whereNumber('role');
+
+        Route::patch(
+            'roles/{role}',
+            'update'
+        )->whereNumber('role');
+
+        Route::delete(
+            'roles/{role}',
+            'destroy'
+        )->whereNumber('role');
+    });
+
+    /*
+    |--------------------------------------------------------------------------
     | User management
     |--------------------------------------------------------------------------
     */
 
     Route::controller(RegisterController::class)->group(function () {
-        Route::get('roles', 'roles');
-
         Route::get('users', 'users');
         Route::post('register', 'register');
 
-        Route::get('users/{user}', 'showUser');
-        Route::put('users/{user}', 'updateUser');
-        Route::patch('users/{user}', 'updateUser');
-        Route::delete('users/{user}', 'destroyUser');
+        Route::get(
+            'users/{user}',
+            'showUser'
+        )->whereNumber('user');
 
-        Route::get('users/{user}/profile', 'showUser');
-        Route::post('users/{user}/profile', 'updateUser');
-        Route::patch('users/{user}/profile', 'updateUser');
+        Route::put(
+            'users/{user}',
+            'updateUser'
+        )->whereNumber('user');
+
+        Route::patch(
+            'users/{user}',
+            'updateUser'
+        )->whereNumber('user');
+
+        Route::delete(
+            'users/{user}',
+            'destroyUser'
+        )->whereNumber('user');
+
+        Route::get(
+            'users/{user}/profile',
+            'showUser'
+        )->whereNumber('user');
+
+        Route::post(
+            'users/{user}/profile',
+            'updateUser'
+        )->whereNumber('user');
+
+        Route::patch(
+            'users/{user}/profile',
+            'updateUser'
+        )->whereNumber('user');
     });
 
     /*
     |--------------------------------------------------------------------------
-    | Main resources
+    | Property management
     |--------------------------------------------------------------------------
     */
 
@@ -120,10 +190,22 @@ Route::middleware('auth:sanctum')->group(function () {
         PropertyController::class
     );
 
+    /*
+    |--------------------------------------------------------------------------
+    | Client management
+    |--------------------------------------------------------------------------
+    */
+
     Route::apiResource(
         'clients',
         ClientController::class
     );
+
+    /*
+    |--------------------------------------------------------------------------
+    | Contract management
+    |--------------------------------------------------------------------------
+    */
 
     Route::apiResource(
         'contracts',
@@ -154,34 +236,82 @@ Route::middleware('auth:sanctum')->group(function () {
     |--------------------------------------------------------------------------
     | Monthly employee targets
     |--------------------------------------------------------------------------
+    |
+    | Specific routes must remain before targets/{target}.
+    |
     */
 
     Route::controller(TargetController::class)->group(function () {
-        Route::get('targets/monthly-scores', 'index');
+        Route::get(
+            'targets/monthly-scores',
+            'index'
+        );
 
-        Route::post('targets', 'store');
+        Route::post(
+            'targets',
+            'store'
+        );
 
-        Route::get('targets/{target}', 'show');
-        Route::put('targets/{target}', 'update');
-        Route::patch('targets/{target}', 'update');
-        Route::delete('targets/{target}', 'destroy');
+        Route::get(
+            'targets/{target}',
+            'show'
+        )->whereNumber('target');
+
+        Route::put(
+            'targets/{target}',
+            'update'
+        )->whereNumber('target');
+
+        Route::patch(
+            'targets/{target}',
+            'update'
+        )->whereNumber('target');
+
+        Route::delete(
+            'targets/{target}',
+            'destroy'
+        )->whereNumber('target');
     });
 
     /*
     |--------------------------------------------------------------------------
     | Employee salaries
     |--------------------------------------------------------------------------
+    |
+    | Specific routes must remain before salaries/{salary}.
+    |
     */
 
     Route::controller(SalaryController::class)->group(function () {
-        Route::get('salaries/monthly-calculations', 'index');
+        Route::get(
+            'salaries/monthly-calculations',
+            'index'
+        );
 
-        Route::post('salaries', 'store');
+        Route::post(
+            'salaries',
+            'store'
+        );
 
-        Route::get('salaries/{salary}', 'show');
-        Route::put('salaries/{salary}', 'update');
-        Route::patch('salaries/{salary}', 'update');
-        Route::delete('salaries/{salary}', 'destroy');
+        Route::get(
+            'salaries/{salary}',
+            'show'
+        )->whereNumber('salary');
+
+        Route::put(
+            'salaries/{salary}',
+            'update'
+        )->whereNumber('salary');
+
+        Route::patch(
+            'salaries/{salary}',
+            'update'
+        )->whereNumber('salary');
+
+        Route::delete(
+            'salaries/{salary}',
+            'destroy'
+        )->whereNumber('salary');
     });
 
     /*
@@ -202,27 +332,30 @@ Route::middleware('auth:sanctum')->group(function () {
     */
 
     Route::controller(ContactMessageController::class)->group(function () {
-        Route::get('contact-messages', 'index');
+        Route::get(
+            'contact-messages',
+            'index'
+        );
 
         Route::get(
             'contact-messages/{contactMessage}',
             'show'
-        );
+        )->whereNumber('contactMessage');
 
         Route::patch(
             'contact-messages/{contactMessage}/read',
             'markAsRead'
-        );
+        )->whereNumber('contactMessage');
 
         Route::patch(
             'contact-messages/{contactMessage}/replied',
             'markAsReplied'
-        );
+        )->whereNumber('contactMessage');
 
         Route::delete(
             'contact-messages/{contactMessage}',
             'destroy'
-        );
+        )->whereNumber('contactMessage');
     });
 
     /*
@@ -232,6 +365,10 @@ Route::middleware('auth:sanctum')->group(function () {
     */
 
     Route::controller(SupportAiController::class)->group(function () {
+        /*
+         * Knowledge management
+         */
+
         Route::get(
             'support-ai/knowledge',
             'indexKnowledge'
@@ -245,22 +382,26 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get(
             'support-ai/knowledge/{knowledge}',
             'showKnowledge'
-        );
+        )->whereNumber('knowledge');
 
         Route::put(
             'support-ai/knowledge/{knowledge}',
             'updateKnowledge'
-        );
+        )->whereNumber('knowledge');
 
         Route::patch(
             'support-ai/knowledge/{knowledge}',
             'updateKnowledge'
-        );
+        )->whereNumber('knowledge');
 
         Route::delete(
             'support-ai/knowledge/{knowledge}',
             'destroyKnowledge'
-        );
+        )->whereNumber('knowledge');
+
+        /*
+         * AI support sessions
+         */
 
         Route::get(
             'support-ai/sessions',
@@ -270,26 +411,33 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get(
             'support-ai/sessions/{session}',
             'sessionMessages'
-        );
+        )->whereNumber('session');
 
         Route::patch(
             'support-ai/sessions/{session}/close',
             'closeSession'
-        );
+        )->whereNumber('session');
     });
 
     /*
     |--------------------------------------------------------------------------
-    | Tasks
+    | Task management
     |--------------------------------------------------------------------------
     */
 
     Route::controller(TaskController::class)->group(function () {
-        Route::get('tasks', 'index');
-        Route::post('tasks', 'store');
+        Route::get(
+            'tasks',
+            'index'
+        );
+
+        Route::post(
+            'tasks',
+            'store'
+        );
 
         /*
-         * Specific routes must stay before tasks/{task}.
+         * Specific task routes must stay before tasks/{task}.
          */
 
         Route::post(
@@ -315,46 +463,46 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post(
             'tasks/{task}/assign-workers',
             'assignWorkers'
-        );
+        )->whereNumber('task');
 
         Route::post(
             'tasks/{task}/sync-workers',
             'syncWorkers'
-        );
+        )->whereNumber('task');
 
         Route::get(
             'tasks/{task}/rewards',
             'rewards'
-        );
+        )->whereNumber('task');
 
         Route::post(
             'tasks/{task}/reward',
             'saveReward'
-        );
+        )->whereNumber('task');
 
         Route::post(
             'tasks/{task}/rewards',
             'saveReward'
-        );
+        )->whereNumber('task');
 
         Route::get(
             'tasks/{task}',
             'show'
-        );
+        )->whereNumber('task');
 
         Route::put(
             'tasks/{task}',
             'update'
-        );
+        )->whereNumber('task');
 
         Route::patch(
             'tasks/{task}',
             'update'
-        );
+        )->whereNumber('task');
 
         Route::delete(
             'tasks/{task}',
             'destroy'
-        );
+        )->whereNumber('task');
     });
 });
