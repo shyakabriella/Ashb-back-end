@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\API\ClientController;
 use App\Http\Controllers\API\ProfileController;
 use App\Http\Controllers\API\PropertyController;
+use App\Http\Controllers\API\InvoiceController;
 use App\Http\Controllers\API\RegisterController;
 use App\Http\Controllers\API\RoleController;
 use App\Http\Controllers\API\TaskController;
@@ -164,6 +165,36 @@ Route::middleware('auth:sanctum')->group(function () {
             'updateUser'
         )->whereNumber('user');
     });
+
+    /*
+    |--------------------------------------------------------------------------
+    | Invoice management
+    |--------------------------------------------------------------------------
+    | Specific invoice routes must stay above Route::apiResource('properties').
+    | Push invoice allows the dashboard to manually send/resend an invoice
+    | for a property.
+    |--------------------------------------------------------------------------
+    */
+
+    Route::post(
+        'properties/{property}/push-invoice',
+        [InvoiceController::class, 'pushPropertyInvoice']
+    )->whereNumber('property');
+
+    Route::get(
+        'invoices',
+        [InvoiceController::class, 'index']
+    );
+
+    Route::get(
+        'invoices/{invoice}',
+        [InvoiceController::class, 'show']
+    )->whereNumber('invoice');
+
+    Route::patch(
+        'invoices/{invoice}/mark-paid',
+        [InvoiceController::class, 'markPaid']
+    )->whereNumber('invoice');
 
     /*
     |--------------------------------------------------------------------------
