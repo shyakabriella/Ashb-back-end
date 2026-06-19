@@ -11,6 +11,7 @@ use App\Http\Controllers\API\TargetController;
 use App\Http\Controllers\API\SalaryController;
 use App\Http\Controllers\API\ContractController;
 use App\Http\Controllers\API\ExpenseController;
+use App\Http\Controllers\API\RequestController;
 use App\Http\Controllers\API\ContactMessageController;
 use App\Http\Controllers\API\SupportAiController;
 use App\Http\Controllers\API\MonthlyPlanPageController;
@@ -196,6 +197,37 @@ Route::middleware('auth:sanctum')->group(function () {
         'contracts',
         ContractController::class
     );
+
+    /*
+    |--------------------------------------------------------------------------
+    | Request management
+    |--------------------------------------------------------------------------
+    | When a request is approved, it automatically creates an expense.
+    | Specific request routes must stay above Route::apiResource('requests').
+    |--------------------------------------------------------------------------
+    */
+
+    Route::get(
+        'requests/references',
+        [RequestController::class, 'references']
+    );
+
+    Route::post(
+        'requests/{businessRequest}/approve',
+        [RequestController::class, 'approve']
+    )->whereNumber('businessRequest');
+
+    Route::post(
+        'requests/{businessRequest}/reject',
+        [RequestController::class, 'reject']
+    )->whereNumber('businessRequest');
+
+    Route::apiResource(
+        'requests',
+        RequestController::class
+    )->parameters([
+        'requests' => 'businessRequest',
+    ]);
 
     /*
     |--------------------------------------------------------------------------
