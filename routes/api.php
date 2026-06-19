@@ -52,13 +52,6 @@ Route::get(
 |--------------------------------------------------------------------------
 | Public property image route
 |--------------------------------------------------------------------------
-|
-| Property cards use normal <img> requests, which cannot attach the Bearer
-| token stored by the dashboard. Only the image file is public; property
-| management and property data routes remain protected by Sanctum.
-|
-| Keep this route before Route::apiResource('properties', ...).
-|
 */
 
 Route::get(
@@ -93,19 +86,11 @@ Route::middleware('auth:sanctum')->group(function () {
     |--------------------------------------------------------------------------
     | Role management
     |--------------------------------------------------------------------------
-    |
-    | Role creation, updating and deletion permissions are also checked
-    | inside RoleController.
-    |
     */
 
     Route::controller(RoleController::class)->group(function () {
         Route::get('roles', 'index');
         Route::post('roles', 'store');
-
-        /*
-         * The status route must stay before roles/{role}.
-         */
 
         Route::patch(
             'roles/{role}/status',
@@ -216,11 +201,19 @@ Route::middleware('auth:sanctum')->group(function () {
     |--------------------------------------------------------------------------
     | Expense management
     |--------------------------------------------------------------------------
-    |
-    | The summary route must remain above the expense resource route.
-    | Otherwise Laravel may treat "summary" as an expense identifier.
-    |
+    | Specific expense routes must remain above Route::apiResource('expenses').
+    |--------------------------------------------------------------------------
     */
+
+    Route::post(
+        'expenses/generate-description',
+        [ExpenseController::class, 'generateDescription']
+    )->middleware('throttle:20,1');
+
+    Route::post(
+        'expenses/{expense}/generate-preview',
+        [ExpenseController::class, 'generatePreview']
+    )->whereNumber('expense')->middleware('throttle:20,1');
 
     Route::get(
         'expenses/summary',
@@ -236,9 +229,6 @@ Route::middleware('auth:sanctum')->group(function () {
     |--------------------------------------------------------------------------
     | Monthly employee targets
     |--------------------------------------------------------------------------
-    |
-    | Specific routes must remain before targets/{target}.
-    |
     */
 
     Route::controller(TargetController::class)->group(function () {
@@ -277,9 +267,6 @@ Route::middleware('auth:sanctum')->group(function () {
     |--------------------------------------------------------------------------
     | Employee salaries
     |--------------------------------------------------------------------------
-    |
-    | Specific routes must remain before salaries/{salary}.
-    |
     */
 
     Route::controller(SalaryController::class)->group(function () {
@@ -365,10 +352,6 @@ Route::middleware('auth:sanctum')->group(function () {
     */
 
     Route::controller(SupportAiController::class)->group(function () {
-        /*
-         * Knowledge management
-         */
-
         Route::get(
             'support-ai/knowledge',
             'indexKnowledge'
@@ -398,10 +381,6 @@ Route::middleware('auth:sanctum')->group(function () {
             'support-ai/knowledge/{knowledge}',
             'destroyKnowledge'
         )->whereNumber('knowledge');
-
-        /*
-         * AI support sessions
-         */
 
         Route::get(
             'support-ai/sessions',
@@ -435,10 +414,6 @@ Route::middleware('auth:sanctum')->group(function () {
             'tasks',
             'store'
         );
-
-        /*
-         * Specific task routes must stay before tasks/{task}.
-         */
 
         Route::post(
             'tasks/ai-organize',

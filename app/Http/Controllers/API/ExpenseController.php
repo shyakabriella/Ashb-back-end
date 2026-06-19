@@ -11,6 +11,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -33,9 +34,27 @@ class ExpenseController extends Controller
         'other',
     ];
 
-    /**
-     * List expenses and return the finance summary used by the expense page.
-     */
+    private const AI_FILE_EXTENSIONS = [
+        'pdf',
+        'jpg',
+        'jpeg',
+        'png',
+        'webp',
+        'txt',
+        'csv',
+        'json',
+        'xml',
+        'md',
+        'log',
+        'rtf',
+        'doc',
+        'docx',
+        'xls',
+        'xlsx',
+        'ppt',
+        'pptx',
+    ];
+
     public function index(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -77,51 +96,57 @@ class ExpenseController extends Controller
         ]);
     }
 
-    /**
-     * Save a new expense and optional receipt files.
-     */
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate($this->storeRules());
 
         $expense = DB::transaction(function () use ($request, $validated) {
-            $employee = isset($validated['employee_id'])
+            $employee = filled($validated['employee_id'] ?? null)
                 ? User::query()->find($validated['employee_id'])
                 : null;
 
-            $property = isset($validated['property_id'])
+            $property = filled($validated['property_id'] ?? null)
                 ? Property::query()->find($validated['property_id'])
                 : null;
 
             $expenseCode = filled($validated['expenseId'] ?? null)
                 ? trim((string) $validated['expenseId'])
                 : $this->generateExpenseCode();
+
             $attachments = $this->storeAttachments(
                 files: $request->file('attachments', []),
                 expenseCode: $expenseCode
             );
 
+            $employeeName = $employee
+                ? $this->userDisplayName($employee)
+                : trim((string) (
+                    $validated['employee_name']
+                    ?? $validated['employee']
+                    ?? ''
+                ));
+
+            $propertyName = $property?->title
+                ?: trim((string) (
+                    $validated['property_name']
+                    ?? $validated['property']
+                    ?? ''
+                ));
+
+            if ($propertyName === '') {
+                $propertyName = 'Monthly Balance';
+            }
+
             return Expense::query()->create([
                 'expense_code' => $expenseCode,
                 'expense_date' => $validated['date'],
                 'employee_id' => $employee?->id,
-                'employee_name' => $employee
-                    ? $this->userDisplayName($employee)
-                    : trim((string) (
-                        $validated['employee_name']
-                        ?? $validated['employee']
-                        ?? ''
-                    )),
+                'employee_name' => $employeeName,
                 'category' => Str::lower(trim((string) $validated['category'])),
                 'amount' => $validated['amount'],
                 'status' => Str::lower((string) $validated['status']),
                 'property_id' => $property?->id,
-                'property_name' => $property?->title
-                    ?: trim((string) (
-                        $validated['property_name']
-                        ?? $validated['property']
-                        ?? ''
-                    )),
+                'property_name' => $propertyName,
                 'description' => filled($validated['description'] ?? null)
                     ? trim((string) $validated['description'])
                     : null,
@@ -144,9 +169,250 @@ class ExpenseController extends Controller
         ], 201);
     }
 
-    /**
-     * Show one expense.
-     */
+    public function generateDescription(Request $request): JsonResponse
+    {
+        $allowedExtensions = implode(',', self::AI_FILE_EXTENSIONS);
+
+        $validated = $request->validate([
+            'files' => ['required_without:images', 'array', 'min:1', 'max:5'],
+            'files.*' => [
+                'required',
+                'file',
+                'mimes:' . $allowedExtensions,
+                'max:20480',
+            ],
+            'images' => ['required_without:files', 'array', 'min:1', 'max:5'],
+            'images.*' => [
+                'required',
+                'file',
+                'mimes:' . $allowedExtensions,
+                'max:20480',
+            ],
+            'purpose' => ['nullable', 'string', 'max:100'],
+            'instruction' => ['nullable', 'string', 'max:2000'],
+        ], [
+            'files.required_without' => 'Please upload at least one supported file.',
+            'images.required_without' => 'Please upload at least one supported file.',
+            'files.*.mimes' => 'Only PDF, image, text, Word, Excel, PowerPoint, RTF, CSV, JSON, XML, Markdown, and LOG files are supported.',
+            'images.*.mimes' => 'Only PDF, image, text, Word, Excel, PowerPoint, RTF, CSV, JSON, XML, Markdown, and LOG files are supported.',
+        ]);
+
+        $apiKey = trim((string) (
+            config('services.ashbhub_ai.api_key')
+            ?: env('ASHBHUB_AI_API_KEY')
+            ?: ''
+        ));
+
+        $model = trim((string) (
+            config('services.ashbhub_ai.model')
+            ?: env('ASHBHUB_AI_MODEL')
+            ?: ''
+        ));
+
+        if ($apiKey === '' || $model === '') {
+            return response()->json([
+                'success' => false,
+                'message' => 'ASHBHUB AI is not configured on the server.',
+            ], 500);
+        }
+
+        $uploadedFiles = $request->file('files', []);
+
+        if (empty($uploadedFiles)) {
+            $uploadedFiles = $request->file('images', []);
+        }
+
+        $uploadedFiles = $this->normalizeUploadedFiles($uploadedFiles);
+
+        if (count($uploadedFiles) === 0) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Please upload at least one supported file.',
+            ], 422);
+        }
+
+        $totalFileBytes = collect($uploadedFiles)->sum(function (UploadedFile $file) {
+            return (int) $file->getSize();
+        });
+
+        if ($totalFileBytes > 14 * 1024 * 1024) {
+            return response()->json([
+                'success' => false,
+                'message' => 'The selected files are too large for ASHBHUB AI description generation. Please upload fewer or smaller files.',
+            ], 422);
+        }
+
+        $instruction = trim((string) ($validated['instruction'] ?? ''));
+
+        if ($instruction === '') {
+            $instruction = implode(' ', [
+                'Read the uploaded expense document, receipt, payment proof, invoice, image, PDF, spreadsheet, or text file.',
+                'Generate one short professional expense description.',
+                'Include vendor, item or service, amount, date, and reason only if visible.',
+                'Do not invent missing information.',
+                'Keep the description short and clear.',
+            ]);
+        }
+
+        $parts = [
+            [
+                'text' => $instruction,
+            ],
+        ];
+
+        foreach ($uploadedFiles as $file) {
+            $realPath = $file->getRealPath();
+
+            if (!$realPath || !is_file($realPath)) {
+                continue;
+            }
+
+            $mimeType = $file->getMimeType()
+                ?: $file->getClientMimeType()
+                ?: $this->guessMimeTypeFromFileName($file->getClientOriginalName());
+
+            if ($mimeType === 'application/octet-stream') {
+                $mimeType = $this->guessMimeTypeFromFileName($file->getClientOriginalName());
+            }
+
+            $parts[] = [
+                'inline_data' => [
+                    'mime_type' => $mimeType,
+                    'data' => base64_encode((string) file_get_contents($realPath)),
+                ],
+            ];
+        }
+
+        if (count($parts) <= 1) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No readable file was found.',
+            ], 422);
+        }
+
+        $response = $this->sendAshbhubAiRequest(
+            model: $model,
+            apiKey: $apiKey,
+            parts: $parts,
+            timeout: 60,
+            maxOutputTokens: 400
+        );
+
+        if (!$response->successful()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'ASHBHUB AI could not generate the description. The uploaded file type may not be readable.',
+                'error' => data_get($response->json(), 'error.message', $response->body()),
+            ], $response->status() >= 500 ? 502 : 422);
+        }
+
+        $description = $this->extractAiText($response->json());
+
+        if ($description === '') {
+            return response()->json([
+                'success' => false,
+                'message' => 'ASHBHUB AI did not return a usable description.',
+            ], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Description generated successfully.',
+            'data' => [
+                'description' => $description,
+            ],
+        ]);
+    }
+
+    public function generatePreview(Request $request, Expense $expense): JsonResponse
+    {
+        $expense->load([
+            'employee:id,first_name,last_name,email',
+            'property:id,title,price',
+            'creator:id,first_name,last_name,email',
+        ]);
+
+        $apiKey = trim((string) (
+            config('services.ashbhub_ai.api_key')
+            ?: env('ASHBHUB_AI_API_KEY')
+            ?: ''
+        ));
+
+        $model = trim((string) (
+            config('services.ashbhub_ai.model')
+            ?: env('ASHBHUB_AI_MODEL')
+            ?: ''
+        ));
+
+        if ($apiKey === '' || $model === '') {
+            return response()->json([
+                'success' => false,
+                'message' => 'ASHBHUB AI is not configured on the server.',
+            ], 500);
+        }
+
+        $employeeName = $expense->employee
+            ? $this->userDisplayName($expense->employee)
+            : $expense->employee_name;
+
+        $propertyName = $expense->property?->title
+            ?: $expense->property_name
+            ?: 'Monthly Balance';
+
+        $prompt = implode("\n", [
+            'Generate one short professional note for an expense preview PDF.',
+            'Do not invent missing details.',
+            'Keep it clear, business-like, and maximum 2 sentences.',
+            '',
+            'Expense details:',
+            'Expense ID: ' . $expense->expense_code,
+            'Date: ' . optional($expense->expense_date)->format('Y-m-d'),
+            'Employee in use: ' . ($employeeName ?: 'No employee'),
+            'Source: ' . $propertyName,
+            'Category: ' . $expense->category,
+            'Amount RWF: ' . $expense->amount,
+            'Status: ' . $expense->status,
+            'Description: ' . ($expense->description ?: 'No description provided.'),
+        ]);
+
+        $response = $this->sendAshbhubAiRequest(
+            model: $model,
+            apiKey: $apiKey,
+            parts: [
+                [
+                    'text' => $prompt,
+                ],
+            ],
+            timeout: 45,
+            maxOutputTokens: 180
+        );
+
+        if (!$response->successful()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'ASHBHUB AI could not generate the expense preview note.',
+                'error' => data_get($response->json(), 'error.message', $response->body()),
+            ], $response->status() >= 500 ? 502 : 422);
+        }
+
+        $previewText = $this->extractAiText($response->json());
+
+        if ($previewText === '') {
+            return response()->json([
+                'success' => false,
+                'message' => 'ASHBHUB AI did not return a usable preview note.',
+            ], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Expense preview note generated successfully.',
+            'data' => [
+                'preview_text' => $previewText,
+            ],
+        ]);
+    }
+
     public function show(Expense $expense): JsonResponse
     {
         $expense->load([
@@ -162,10 +428,6 @@ class ExpenseController extends Controller
         ]);
     }
 
-    /**
-     * Update only the submitted expense fields.
-     * Existing attachments remain unless their paths are explicitly removed.
-     */
     public function update(Request $request, Expense $expense): JsonResponse
     {
         $validated = $request->validate($this->updateRules());
@@ -218,22 +480,30 @@ class ExpenseController extends Controller
                     ? Property::query()->find($validated['property_id'])
                     : null;
 
-                $payload['property_id'] = $property?->id;
-                $payload['property_name'] = $property?->title
+                $propertyName = $property?->title
                     ?: trim((string) (
                         $validated['property_name']
                         ?? $validated['property']
                         ?? ''
                     ));
+
+                $payload['property_id'] = $property?->id;
+                $payload['property_name'] = $propertyName !== ''
+                    ? $propertyName
+                    : 'Monthly Balance';
             } elseif (
                 array_key_exists('property_name', $validated)
                 || array_key_exists('property', $validated)
             ) {
-                $payload['property_name'] = trim((string) (
+                $propertyName = trim((string) (
                     $validated['property_name']
                     ?? $validated['property']
                     ?? ''
                 ));
+
+                $payload['property_name'] = $propertyName !== ''
+                    ? $propertyName
+                    : 'Monthly Balance';
             }
 
             if (array_key_exists('description', $validated)) {
@@ -292,9 +562,6 @@ class ExpenseController extends Controller
         ]);
     }
 
-    /**
-     * Delete an expense and its uploaded files.
-     */
     public function destroy(Expense $expense): JsonResponse
     {
         DB::transaction(function () use ($expense) {
@@ -316,9 +583,6 @@ class ExpenseController extends Controller
         ]);
     }
 
-    /**
-     * Return only the totals used by dashboards and create-expense forms.
-     */
     public function summary(): JsonResponse
     {
         return response()->json([
@@ -330,12 +594,16 @@ class ExpenseController extends Controller
 
     private function storeRules(): array
     {
+        $allowedExtensions = implode(',', self::AI_FILE_EXTENSIONS);
+
         return [
             'expenseId' => ['nullable', 'string', 'max:50', 'unique:expenses,expense_code'],
             'date' => ['required', 'date'],
+
             'employee_id' => ['nullable', 'integer', 'exists:users,id'],
             'employee' => ['nullable', 'string', 'max:255'],
             'employee_name' => ['nullable', 'string', 'max:255', 'required_without_all:employee_id,employee'],
+
             'category' => ['required', Rule::in(self::CATEGORIES)],
             'amount' => ['required', 'numeric', 'min:0.01'],
             'status' => ['required', Rule::in([
@@ -344,26 +612,35 @@ class ExpenseController extends Controller
                 'Pending',
                 'Overdue',
             ])],
+
             'property_id' => ['nullable', 'integer', 'exists:properties,id'],
             'property' => ['nullable', 'string', 'max:255'],
-            'property_name' => ['nullable', 'string', 'max:255', 'required_without_all:property_id,property'],
+            'property_name' => ['nullable', 'string', 'max:255'],
+
+            'affects_balance' => ['nullable', 'boolean'],
+            'balance_source' => ['nullable', 'string', 'max:100'],
+
             'description' => ['nullable', 'string', 'max:5000'],
             'attachments' => ['nullable', 'array', 'max:10'],
             'attachments.*' => [
                 'file',
-                'mimes:pdf,jpg,jpeg,png,webp',
-                'max:10240',
+                'mimes:' . $allowedExtensions,
+                'max:20480',
             ],
         ];
     }
 
     private function updateRules(): array
     {
+        $allowedExtensions = implode(',', self::AI_FILE_EXTENSIONS);
+
         return [
             'date' => ['sometimes', 'required', 'date'],
+
             'employee_id' => ['sometimes', 'nullable', 'integer', 'exists:users,id'],
             'employee' => ['sometimes', 'nullable', 'string', 'max:255'],
             'employee_name' => ['sometimes', 'nullable', 'string', 'max:255'],
+
             'category' => ['sometimes', 'required', Rule::in(self::CATEGORIES)],
             'amount' => ['sometimes', 'required', 'numeric', 'min:0.01'],
             'status' => ['sometimes', 'required', Rule::in([
@@ -372,15 +649,20 @@ class ExpenseController extends Controller
                 'Pending',
                 'Overdue',
             ])],
+
             'property_id' => ['sometimes', 'nullable', 'integer', 'exists:properties,id'],
             'property' => ['sometimes', 'nullable', 'string', 'max:255'],
             'property_name' => ['sometimes', 'nullable', 'string', 'max:255'],
+
+            'affects_balance' => ['sometimes', 'nullable', 'boolean'],
+            'balance_source' => ['sometimes', 'nullable', 'string', 'max:100'],
+
             'description' => ['sometimes', 'nullable', 'string', 'max:5000'],
             'attachments' => ['nullable', 'array', 'max:10'],
             'attachments.*' => [
                 'file',
-                'mimes:pdf,jpg,jpeg,png,webp',
-                'max:10240',
+                'mimes:' . $allowedExtensions,
+                'max:20480',
             ],
             'remove_attachment_paths' => ['nullable', 'array'],
             'remove_attachment_paths.*' => ['string', 'max:1000'],
@@ -390,7 +672,7 @@ class ExpenseController extends Controller
     private function applyFilters(Builder $query, array $validated): void
     {
         if (filled($validated['status'] ?? null)) {
-            $query->where('status', $validated['status']);
+            $query->where('status', Str::lower((string) $validated['status']));
         }
 
         if (filled($validated['category'] ?? null)) {
@@ -440,18 +722,28 @@ class ExpenseController extends Controller
 
     private function buildSummary(): array
     {
+        $monthStart = now()->startOfMonth()->toDateString();
+        $monthEnd = now()->endOfMonth()->toDateString();
+
         $totalPropertyPrice = (float) Property::query()
             ->whereNotNull('price')
             ->sum('price');
 
-        $consumedAmount = (float) Expense::query()->sum('amount');
+        $monthlyExpensesQuery = Expense::query()
+            ->whereDate('expense_date', '>=', $monthStart)
+            ->whereDate('expense_date', '<=', $monthEnd);
+
+        $consumedAmount = (float) (clone $monthlyExpensesQuery)->sum('amount');
 
         return [
             'total_property_price' => $totalPropertyPrice,
             'consumed_amount' => $consumedAmount,
             'balance' => $totalPropertyPrice - $consumedAmount,
-            'expenses_count' => Expense::query()->count(),
+            'expenses_count' => (clone $monthlyExpensesQuery)->count(),
             'properties_count' => Property::query()->count(),
+            'month_start' => $monthStart,
+            'month_end' => $monthEnd,
+            'month_label' => now()->format('F Y'),
         ];
     }
 
@@ -473,21 +765,15 @@ class ExpenseController extends Controller
      */
     private function storeAttachments(mixed $files, string $expenseCode): array
     {
-        if ($files instanceof UploadedFile) {
-            $files = [$files];
-        }
+        $files = $this->normalizeUploadedFiles($files);
 
-        if (!is_array($files)) {
+        if ($files === []) {
             return [];
         }
 
         $stored = [];
 
         foreach ($files as $file) {
-            if (!$file instanceof UploadedFile) {
-                continue;
-            }
-
             $path = $file->store(
                 'expenses/' . Str::slug($expenseCode),
                 'public'
@@ -545,6 +831,103 @@ class ExpenseController extends Controller
             'created_at' => $expense->created_at,
             'updated_at' => $expense->updated_at,
         ];
+    }
+
+    private function sendAshbhubAiRequest(
+        string $model,
+        string $apiKey,
+        array $parts,
+        int $timeout = 60,
+        int $maxOutputTokens = 400
+    ) {
+        $modelPath = Str::startsWith($model, 'models/')
+            ? $model
+            : 'models/' . $model;
+
+        $endpoint = "https://generativelanguage.googleapis.com/v1beta/{$modelPath}:generateContent";
+
+        return Http::timeout($timeout)
+            ->withHeaders([
+                'x-goog-api-key' => $apiKey,
+                'Content-Type' => 'application/json',
+            ])
+            ->post($endpoint, [
+                'contents' => [
+                    [
+                        'role' => 'user',
+                        'parts' => $parts,
+                    ],
+                ],
+                'generationConfig' => [
+                    'temperature' => 0.2,
+                    'maxOutputTokens' => $maxOutputTokens,
+                ],
+            ]);
+    }
+
+    private function extractAiText(array $payload): string
+    {
+        $parts = data_get($payload, 'candidates.0.content.parts', []);
+
+        if (!is_array($parts)) {
+            return '';
+        }
+
+        $text = collect($parts)
+            ->map(fn ($part) => is_array($part) ? ($part['text'] ?? '') : '')
+            ->filter(fn ($value) => is_string($value) && trim($value) !== '')
+            ->map(fn ($value) => trim((string) $value))
+            ->implode("\n");
+
+        $text = trim(preg_replace('/\s+/', ' ', $text) ?: '');
+
+        return Str::limit($text, 1200, '');
+    }
+
+    private function guessMimeTypeFromFileName(string $fileName): string
+    {
+        $extension = Str::lower(pathinfo($fileName, PATHINFO_EXTENSION));
+
+        return match ($extension) {
+            'pdf' => 'application/pdf',
+            'jpg', 'jpeg' => 'image/jpeg',
+            'png' => 'image/png',
+            'webp' => 'image/webp',
+            'txt', 'log' => 'text/plain',
+            'csv' => 'text/csv',
+            'json' => 'application/json',
+            'xml' => 'application/xml',
+            'md' => 'text/markdown',
+            'rtf' => 'application/rtf',
+            'doc' => 'application/msword',
+            'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'xls' => 'application/vnd.ms-excel',
+            'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'ppt' => 'application/vnd.ms-powerpoint',
+            'pptx' => 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            default => 'application/octet-stream',
+        };
+    }
+
+    /**
+     * @param mixed $files
+     * @return array<int, UploadedFile>
+     */
+    private function normalizeUploadedFiles(mixed $files): array
+    {
+        if ($files instanceof UploadedFile) {
+            return [$files];
+        }
+
+        if (!is_array($files)) {
+            return [];
+        }
+
+        return collect($files)
+            ->flatten()
+            ->filter(fn ($file) => $file instanceof UploadedFile)
+            ->values()
+            ->all();
     }
 
     private function userDisplayName(User $user): string
