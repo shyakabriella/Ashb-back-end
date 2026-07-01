@@ -51,7 +51,7 @@ class TargetController extends Controller
             ? (int) $validated['user_id']
             : null;
 
-        $workers = $this->resolveWorkers($authUser, $requestedUserId, $month);
+        $workers = $this->resolveWorkers($authUser, $requestedUserId);
         $includeTasks = $request->boolean('include_tasks') && $workers->count() === 1;
 
         $scores = $workers
@@ -204,39 +204,29 @@ class TargetController extends Controller
         ];
     }
 
-    private function resolveWorkers(User $authUser, ?int $requestedUserId, ?string $month = null): Collection
+    private function resolveWorkers(User $authUser, ?int $requestedUserId): Collection
     {
-        if (!$this->canManageTargets($authUser)) {
+        if ($this->isWorker($authUser)) {
             return collect([$authUser->loadMissing('role')]);
         }
 
+        if (!$this->canManageTargets($authUser)) {
+            abort(403, 'You are not allowed to view target scores.');
+        }
+
         $query = User::with('role')
-            ->where(function ($activeQuery) {
-                $activeQuery
-                    ->where('is_active', true)
-                    ->orWhereNull('is_active');
+            ->where(function ($query) {
+                $query
+                    ->whereIn('role_id', [4, 5])
+                    ->orWhereHas('role', function ($roleQuery) {
+                        $roleQuery
+                            ->whereIn('slug', ['employee', 'intern'])
+                            ->orWhereIn('name', ['Employee', 'Intern']);
+                    });
             });
 
         if ($requestedUserId) {
             $query->where('id', $requestedUserId);
-        } elseif ($month) {
-            $monthStart = Carbon::parse($month . '-01')->startOfMonth()->startOfDay();
-            $monthEnd = $monthStart->copy()->endOfMonth()->endOfDay();
-
-            $query->whereExists(function ($exists) use ($monthStart, $monthEnd) {
-                $exists
-                    ->selectRaw('1')
-                    ->from('task_user')
-                    ->join('tasks', 'tasks.id', '=', 'task_user.task_id')
-                    ->whereColumn('task_user.user_id', 'users.id')
-                    ->where(function ($taskQuery) use ($monthStart, $monthEnd) {
-                        $taskQuery
-                            ->whereBetween('tasks.start_at', [$monthStart, $monthEnd])
-                            ->orWhereBetween('tasks.end_at', [$monthStart, $monthEnd])
-                            ->orWhereBetween('tasks.created_at', [$monthStart, $monthEnd])
-                            ->orWhereBetween('tasks.updated_at', [$monthStart, $monthEnd]);
-                    });
-            });
         }
 
         return $query->orderBy('id')->get();
@@ -244,14 +234,12 @@ class TargetController extends Controller
 
     private function ensureWorker(User $user, string $field): void
     {
-        $isActive = $user->getAttribute('is_active');
-
-        if ($isActive === null || (int) $isActive === 1) {
+        if ($this->isWorker($user)) {
             return;
         }
 
         throw ValidationException::withMessages([
-            $field => 'Only active users can receive monthly targets.',
+            $field => 'Only employees and interns can receive monthly targets.',
         ]);
     }
 
@@ -262,7 +250,7 @@ class TargetController extends Controller
         }
 
         return $this->canManageTargets($authUser)
-            || ((int) $target->user_id === (int) $authUser->id);
+            || ($this->isWorker($authUser) && (int) $target->user_id === (int) $authUser->id);
     }
 
     private function canManageTargets(?User $user): bool

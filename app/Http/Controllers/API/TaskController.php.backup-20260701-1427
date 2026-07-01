@@ -1478,10 +1478,12 @@ class TaskController extends Controller
             ], 401);
         }
 
-        /*
-         * Any authenticated user can view their own assigned-task report.
-         * Managers can view all users or a selected user.
-         */
+        if (!$this->isWorker($user) && !$this->canViewAllWeeklyReports($user)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You are not allowed to view weekly reports.',
+            ], 403);
+        }
 
         $requestedUserId = $request->filled('user_id')
             ? (int) $request->integer('user_id')
@@ -1568,9 +1570,7 @@ class TaskController extends Controller
     ): array {
         $workers = $this->resolveWeeklyReportSubjects(
             authUser: $authUser,
-            requestedUserId: $requestedUserId,
-            weekStart: $weekStart,
-            weekEnd: $weekEnd
+            requestedUserId: $requestedUserId
         );
 
         $reports = $workers
@@ -2311,46 +2311,21 @@ class TaskController extends Controller
     }
 
     /**
-     * Users included in the requested performance report.
-     * Managers see active users who have assigned tasks in the selected period.
-     * Non-managers see only their own assigned-task report, regardless of role.
+     * Workers included in the requested weekly report.
      */
-    private function resolveWeeklyReportSubjects(
-        User $authUser,
-        ?int $requestedUserId = null,
-        ?Carbon $weekStart = null,
-        ?Carbon $weekEnd = null
-    ): Collection {
-        if (!$this->canViewAllWeeklyReports($authUser)) {
+    private function resolveWeeklyReportSubjects(User $authUser, ?int $requestedUserId = null): Collection
+    {
+        if ($this->isWorker($authUser)) {
             return collect([$authUser->loadMissing('role')]);
         }
 
         $query = User::with('role')
-            ->where(function ($activeQuery) {
-                $activeQuery
-                    ->where('is_active', true)
-                    ->orWhereNull('is_active');
+            ->whereHas('role', function ($query) {
+                $query->whereIn('slug', $this->workerRoles());
             });
 
         if ($requestedUserId) {
             $query->where('id', $requestedUserId);
-        }
-
-        if ($weekStart && $weekEnd) {
-            $query->whereExists(function ($exists) use ($weekStart, $weekEnd) {
-                $exists
-                    ->select(DB::raw(1))
-                    ->from('task_user')
-                    ->join('tasks', 'tasks.id', '=', 'task_user.task_id')
-                    ->whereColumn('task_user.user_id', 'users.id')
-                    ->where(function ($taskQuery) use ($weekStart, $weekEnd) {
-                        $taskQuery
-                            ->whereBetween('tasks.start_at', [$weekStart, $weekEnd])
-                            ->orWhereBetween('tasks.end_at', [$weekStart, $weekEnd])
-                            ->orWhereBetween('tasks.created_at', [$weekStart, $weekEnd])
-                            ->orWhereBetween('tasks.updated_at', [$weekStart, $weekEnd]);
-                    });
-            });
         }
 
         return $query->orderBy('id')->get();
