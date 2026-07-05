@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Expense;
 use App\Models\Property;
 use App\Models\User;
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -65,8 +66,13 @@ class ExpenseController extends Controller
             'property_id' => ['nullable', 'integer', 'exists:properties,id'],
             'from_date' => ['nullable', 'date'],
             'to_date' => ['nullable', 'date', 'after_or_equal:from_date'],
+            'date_from' => ['nullable', 'date'],
+            'date_to' => ['nullable', 'date', 'after_or_equal:date_from'],
+            'month' => ['nullable', 'date_format:Y-m'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
         ]);
+
+        [$fromDate, $toDate] = $this->resolveExpenseDateRange($validated);
 
         $query = Expense::query()
             ->with([
@@ -77,7 +83,7 @@ class ExpenseController extends Controller
             ->latest('expense_date')
             ->latest('id');
 
-        $this->applyFilters($query, $validated);
+        $this->applyFilters($query, $validated, $fromDate, $toDate);
 
         $expenses = $query
             ->paginate((int) ($validated['per_page'] ?? 20))
@@ -92,7 +98,7 @@ class ExpenseController extends Controller
             'success' => true,
             'message' => 'Expenses fetched successfully.',
             'data' => $expenses,
-            'summary' => $this->buildSummary(),
+            'summary' => $this->buildSummary($fromDate, $toDate),
         ]);
     }
 
@@ -583,12 +589,22 @@ class ExpenseController extends Controller
         ]);
     }
 
-    public function summary(): JsonResponse
+    public function summary(Request $request): JsonResponse
     {
+        $validated = $request->validate([
+            'from_date' => ['nullable', 'date'],
+            'to_date' => ['nullable', 'date', 'after_or_equal:from_date'],
+            'date_from' => ['nullable', 'date'],
+            'date_to' => ['nullable', 'date', 'after_or_equal:date_from'],
+            'month' => ['nullable', 'date_format:Y-m'],
+        ]);
+
+        [$fromDate, $toDate] = $this->resolveExpenseDateRange($validated);
+
         return response()->json([
             'success' => true,
             'message' => 'Expense summary fetched successfully.',
-            'data' => $this->buildSummary(),
+            'data' => $this->buildSummary($fromDate, $toDate),
         ]);
     }
 
@@ -669,7 +685,7 @@ class ExpenseController extends Controller
         ];
     }
 
-    private function applyFilters(Builder $query, array $validated): void
+    private function applyFilters(Builder $query, array $validated, Carbon $fromDate, Carbon $toDate): void
     {
         if (filled($validated['status'] ?? null)) {
             $query->where('status', Str::lower((string) $validated['status']));
@@ -687,13 +703,9 @@ class ExpenseController extends Controller
             $query->where('property_id', (int) $validated['property_id']);
         }
 
-        if (filled($validated['from_date'] ?? null)) {
-            $query->whereDate('expense_date', '>=', $validated['from_date']);
-        }
-
-        if (filled($validated['to_date'] ?? null)) {
-            $query->whereDate('expense_date', '<=', $validated['to_date']);
-        }
+        $query
+            ->whereDate('expense_date', '>=', $fromDate->toDateString())
+            ->whereDate('expense_date', '<=', $toDate->toDateString());
 
         $search = trim((string) ($validated['search'] ?? ''));
 
@@ -720,30 +732,92 @@ class ExpenseController extends Controller
         }
     }
 
-    private function buildSummary(): array
+    private function resolveExpenseDateRange(array $validated): array
     {
-        $monthStart = now()->startOfMonth()->toDateString();
-        $monthEnd = now()->endOfMonth()->toDateString();
+        if (filled($validated['month'] ?? null)) {
+            $startDate = Carbon::createFromFormat('Y-m', (string) $validated['month'])
+                ->startOfMonth();
+            $endDate = Carbon::createFromFormat('Y-m', (string) $validated['month'])
+                ->endOfMonth();
 
-        $totalPropertyPrice = (float) Property::query()
+            return [$startDate, $endDate];
+        }
+
+        $rawFromDate = $validated['from_date']
+            ?? $validated['date_from']
+            ?? null;
+
+        $rawToDate = $validated['to_date']
+            ?? $validated['date_to']
+            ?? null;
+
+        $startDate = filled($rawFromDate)
+            ? Carbon::parse((string) $rawFromDate)->startOfDay()
+            : now()->startOfMonth();
+
+        $endDate = filled($rawToDate)
+            ? Carbon::parse((string) $rawToDate)->endOfDay()
+            : now()->endOfDay();
+
+        if ($endDate->lt($startDate)) {
+            $endDate = $startDate->copy()->endOfDay();
+        }
+
+        return [$startDate, $endDate];
+    }
+
+    private function buildSummary(?Carbon $fromDate = null, ?Carbon $toDate = null): array
+    {
+        $fromDate = $fromDate ?: now()->startOfMonth();
+        $toDate = $toDate ?: now()->endOfDay();
+
+        $monthlyPropertyPrice = (float) Property::query()
             ->whereNotNull('price')
+            ->where(function (Builder $query) {
+                $query
+                    ->whereNull('status')
+                    ->orWhere('status', '!=', 'inactive');
+            })
             ->sum('price');
 
-        $monthlyExpensesQuery = Expense::query()
-            ->whereDate('expense_date', '>=', $monthStart)
-            ->whereDate('expense_date', '<=', $monthEnd);
+        $monthCount = $fromDate
+            ->copy()
+            ->startOfMonth()
+            ->diffInMonths($toDate->copy()->startOfMonth()) + 1;
 
-        $consumedAmount = (float) (clone $monthlyExpensesQuery)->sum('amount');
+        $totalPropertyPrice = $monthlyPropertyPrice * $monthCount;
+
+        $expensesQuery = Expense::query()
+            ->whereDate('expense_date', '>=', $fromDate->toDateString())
+            ->whereDate('expense_date', '<=', $toDate->toDateString());
+
+        $consumedAmount = (float) (clone $expensesQuery)->sum('amount');
 
         return [
-            'total_property_price' => $totalPropertyPrice,
-            'consumed_amount' => $consumedAmount,
-            'balance' => $totalPropertyPrice - $consumedAmount,
-            'expenses_count' => (clone $monthlyExpensesQuery)->count(),
-            'properties_count' => Property::query()->count(),
-            'month_start' => $monthStart,
-            'month_end' => $monthEnd,
-            'month_label' => now()->format('F Y'),
+            'total_property_price' => round($totalPropertyPrice, 2),
+            'monthly_property_price' => round($monthlyPropertyPrice, 2),
+            'consumed_amount' => round($consumedAmount, 2),
+            'balance' => round($totalPropertyPrice - $consumedAmount, 2),
+            'expenses_count' => (clone $expensesQuery)->count(),
+            'properties_count' => Property::query()
+                ->where(function (Builder $query) {
+                    $query
+                        ->whereNull('status')
+                        ->orWhere('status', '!=', 'inactive');
+                })
+                ->count(),
+            'paid_expenses_count' => (clone $expensesQuery)->where('status', 'paid')->count(),
+            'pending_expenses_count' => (clone $expensesQuery)->where('status', 'pending')->count(),
+            'overdue_expenses_count' => (clone $expensesQuery)->where('status', 'overdue')->count(),
+            'from_date' => $fromDate->toDateString(),
+            'to_date' => $toDate->toDateString(),
+            'date_from' => $fromDate->toDateString(),
+            'date_to' => $toDate->toDateString(),
+            'month_start' => $fromDate->toDateString(),
+            'month_end' => $toDate->toDateString(),
+            'month_label' => $fromDate->format('M d, Y') . ' - ' . $toDate->format('M d, Y'),
+            'period_label' => $fromDate->format('M d, Y') . ' - ' . $toDate->format('M d, Y'),
+            'month_count' => $monthCount,
         ];
     }
 
