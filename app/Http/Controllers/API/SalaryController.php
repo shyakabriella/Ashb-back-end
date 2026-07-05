@@ -25,8 +25,8 @@ class SalaryController extends Controller
      * List calculated monthly payroll salaries.
      *
      * Rules:
-     * - Employee/Intern sees only their own salary calculation.
-     * - CEO/MD/Admin sees all active workers or one selected worker.
+     * - Non-manager users see only their own salary calculation.
+     * - CEO/MD/Admin sees all active users or one selected active user.
      * - Salary is earned from completed AND rewarded tasks only.
      * - A completed task without reward does not increase payroll salary.
      *
@@ -111,8 +111,7 @@ class SalaryController extends Controller
         $validated = $request->validate($this->salaryRules());
 
         $worker = User::with('role')->findOrFail((int) $validated['user_id']);
-        $this->ensureWorker($worker, 'user_id');
-        $this->ensureActiveWorker($worker, 'user_id');
+        $this->ensureActivePayrollUser($worker, 'user_id');
 
         $effectiveFrom = Carbon::parse($validated['effective_from'] . '-01')
             ->startOfMonth()
@@ -133,7 +132,7 @@ class SalaryController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Employee salary saved successfully.',
+            'message' => 'User salary saved successfully.',
             'data' => $this->calculateForWorker(
                 worker: $worker,
                 fromDate: Carbon::parse($salary->effective_from)->startOfMonth(),
@@ -174,7 +173,7 @@ class SalaryController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Employee salary fetched successfully.',
+            'message' => 'User salary fetched successfully.',
             'data' => $this->calculateForWorker(
                 worker: $salary->worker,
                 fromDate: $fromDate,
@@ -218,7 +217,7 @@ class SalaryController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Employee salary updated successfully.',
+            'message' => 'User salary updated successfully.',
             'data' => $this->calculateForWorker(
                 worker: $salary->worker,
                 fromDate: Carbon::parse($salary->effective_from)->startOfMonth(),
@@ -603,39 +602,30 @@ class SalaryController extends Controller
     }
 
     /**
-     * Resolve active workers visible to current user.
+     * Resolve active payroll users visible to current user.
+     *
+     * Payroll is not limited to Employee/Intern roles because every active
+     * system user may deserve salary. This matches the user records returned
+     * by RegisterController, where users are managed through the users table
+     * and active status controls account availability.
      */
     private function resolveWorkers(User $authUser, ?int $requestedUserId): Collection
     {
-        if ($this->isWorker($authUser)) {
-            $this->ensureActiveWorker($authUser, 'user_id');
+        if (!$this->canManageSalaries($authUser)) {
+            $this->ensureActivePayrollUser($authUser, 'user_id');
 
             return collect([$authUser->loadMissing('role')]);
         }
 
-        if (!$this->canManageSalaries($authUser)) {
-            abort(403, 'You are not allowed to view salary calculations.');
-        }
-
         if ($requestedUserId) {
             $worker = User::with('role')->findOrFail($requestedUserId);
-            $this->ensureWorker($worker, 'user_id');
-            $this->ensureActiveWorker($worker, 'user_id');
+            $this->ensureActivePayrollUser($worker, 'user_id');
 
             return collect([$worker]);
         }
 
         return User::with('role')
             ->where('is_active', true)
-            ->where(function ($query) {
-                $query
-                    ->whereIn('role_id', [4, 5])
-                    ->orWhereHas('role', function ($roleQuery) {
-                        $roleQuery
-                            ->whereIn('slug', ['employee', 'intern'])
-                            ->orWhereIn('name', ['Employee', 'Intern']);
-                    });
-            })
             ->orderBy('first_name')
             ->orderBy('last_name')
             ->orderBy('id')
@@ -643,30 +633,16 @@ class SalaryController extends Controller
     }
 
     /**
-     * Only employees and interns can receive salary payroll calculation.
+     * Payroll should include active users only.
      */
-    private function ensureWorker(User $user, string $field): void
-    {
-        if ($this->isWorker($user)) {
-            return;
-        }
-
-        throw ValidationException::withMessages([
-            $field => 'Only employees and interns can receive salaries.',
-        ]);
-    }
-
-    /**
-     * Payroll should include active workers only.
-     */
-    private function ensureActiveWorker(User $user, string $field): void
+    private function ensureActivePayrollUser(User $user, string $field): void
     {
         if ((bool) ($user->is_active ?? true)) {
             return;
         }
 
         throw ValidationException::withMessages([
-            $field => 'Only active workers can be included in payroll.',
+            $field => 'Only active users can be included in payroll.',
         ]);
     }
 
@@ -680,7 +656,7 @@ class SalaryController extends Controller
         }
 
         return $this->canManageSalaries($authUser)
-            || ($this->isWorker($authUser) && (int) $salary->user_id === (int) $authUser->id);
+            || (int) $salary->user_id === (int) $authUser->id;
     }
 
     /**
@@ -707,18 +683,6 @@ class SalaryController extends Controller
         ], true) || in_array((int) $user->role_id, [1, 2], true);
     }
 
-    /**
-     * Is employee or intern.
-     */
-    private function isWorker(?User $user): bool
-    {
-        if (!$user) {
-            return false;
-        }
-
-        return in_array($this->roleSlug($user), ['employee', 'intern'], true)
-            || in_array((int) $user->role_id, [4, 5], true);
-    }
 
     /**
      * Normalize role names/slugs.
