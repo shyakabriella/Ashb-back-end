@@ -170,9 +170,11 @@ Route::middleware('auth:sanctum')->group(function () {
     |--------------------------------------------------------------------------
     | Invoice management
     |--------------------------------------------------------------------------
-    | Specific invoice routes must stay above Route::apiResource('properties').
-    | Push invoice allows the dashboard to manually send/resend an invoice
-    | for a property.
+    | These routes must stay above Route::apiResource('properties').
+    | The payment page keeps showing property list, but these routes allow:
+    | - Push invoice manually
+    | - Mark property invoice as paid manually
+    | - View saved invoice records when needed
     |--------------------------------------------------------------------------
     */
 
@@ -181,14 +183,29 @@ Route::middleware('auth:sanctum')->group(function () {
         [InvoiceController::class, 'pushPropertyInvoice']
     )->whereNumber('property');
 
+    Route::post(
+        'properties/{property}/mark-paid',
+        [InvoiceController::class, 'markPropertyPaid']
+    )->whereNumber('property');
+
+    Route::patch(
+        'properties/{property}/mark-paid',
+        [InvoiceController::class, 'markPropertyPaid']
+    )->whereNumber('property');
+
+    Route::get(
+        'invoices/summary',
+        [InvoiceController::class, 'summary']
+    );
+
     Route::get(
         'invoices',
         [InvoiceController::class, 'index']
     );
 
-    Route::get(
-        'invoices/{invoice}',
-        [InvoiceController::class, 'show']
+    Route::post(
+        'invoices/{invoice}/mark-paid',
+        [InvoiceController::class, 'markPaid']
     )->whereNumber('invoice');
 
     Route::patch(
@@ -196,11 +213,23 @@ Route::middleware('auth:sanctum')->group(function () {
         [InvoiceController::class, 'markPaid']
     )->whereNumber('invoice');
 
+    Route::get(
+        'invoices/{invoice}',
+        [InvoiceController::class, 'show']
+    )->whereNumber('invoice');
+
     /*
     |--------------------------------------------------------------------------
     | Property management
     |--------------------------------------------------------------------------
+    | Specific property routes must stay above Route::apiResource('properties').
+    |--------------------------------------------------------------------------
     */
+
+    Route::get(
+        'properties/monthly-finance',
+        [PropertyController::class, 'monthlyFinance']
+    );
 
     Route::apiResource(
         'properties',

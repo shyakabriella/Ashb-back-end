@@ -4,6 +4,7 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\Expense;
+use App\Models\Invoice;
 use App\Models\Property;
 use App\Models\User;
 use Carbon\Carbon;
@@ -771,7 +772,35 @@ class ExpenseController extends Controller
         $fromDate = $fromDate ?: now()->startOfMonth();
         $toDate = $toDate ?: now()->endOfDay();
 
-        $monthlyPropertyPrice = (float) Property::query()
+        /*
+         * IMPORTANT BUSINESS RULE
+         * Available Property Balance must come from PAID property invoices only.
+         * A property will not increase available balance until its invoice/payment
+         * is manually marked as paid from the Payment page.
+         */
+        $paidInvoicesQuery = Invoice::query()
+            ->where('payment_status', Invoice::PAYMENT_STATUS_PAID)
+            ->whereDate('invoice_date', '>=', $fromDate->toDateString())
+            ->whereDate('invoice_date', '<=', $toDate->toDateString());
+
+        $paidPropertyBalance = (float) (clone $paidInvoicesQuery)->sum('amount');
+
+        $paidPropertyIds = (clone $paidInvoicesQuery)
+            ->whereNotNull('property_id')
+            ->distinct()
+            ->pluck('property_id');
+
+        $paidPropertiesCount = $paidPropertyIds->count();
+
+        $registeredPropertiesCount = Property::query()
+            ->where(function (Builder $query) {
+                $query
+                    ->whereNull('status')
+                    ->orWhere('status', '!=', 'inactive');
+            })
+            ->count();
+
+        $registeredMonthlyPropertyPrice = (float) Property::query()
             ->whereNotNull('price')
             ->where(function (Builder $query) {
                 $query
@@ -780,35 +809,56 @@ class ExpenseController extends Controller
             })
             ->sum('price');
 
+        $unpaidInvoicesQuery = Invoice::query()
+            ->where('payment_status', '!=', Invoice::PAYMENT_STATUS_PAID)
+            ->whereDate('invoice_date', '>=', $fromDate->toDateString())
+            ->whereDate('invoice_date', '<=', $toDate->toDateString());
+
+        $unpaidPropertyInvoiceAmount = (float) (clone $unpaidInvoicesQuery)->sum('amount');
+
         $monthCount = $fromDate
             ->copy()
             ->startOfMonth()
             ->diffInMonths($toDate->copy()->startOfMonth()) + 1;
-
-        $totalPropertyPrice = $monthlyPropertyPrice * $monthCount;
 
         $expensesQuery = Expense::query()
             ->whereDate('expense_date', '>=', $fromDate->toDateString())
             ->whereDate('expense_date', '<=', $toDate->toDateString());
 
         $consumedAmount = (float) (clone $expensesQuery)->sum('amount');
+        $availableBalance = $paidPropertyBalance;
+        $balance = $availableBalance - $consumedAmount;
 
         return [
-            'total_property_price' => round($totalPropertyPrice, 2),
-            'monthly_property_price' => round($monthlyPropertyPrice, 2),
+            // Existing frontend keys kept, but values now mean PAID money only.
+            'total_property_price' => round($availableBalance, 2),
+            'monthly_property_price' => round($availableBalance, 2),
+            'total_available_balance' => round($availableBalance, 2),
+
+            // Clear new keys for reports/debugging.
+            'paid_property_balance' => round($paidPropertyBalance, 2),
+            'paid_property_invoice_amount' => round($paidPropertyBalance, 2),
+            'unpaid_property_invoice_amount' => round($unpaidPropertyInvoiceAmount, 2),
+            'registered_monthly_property_price' => round($registeredMonthlyPropertyPrice, 2),
+            'registered_total_property_price' => round($registeredMonthlyPropertyPrice * $monthCount, 2),
+
             'consumed_amount' => round($consumedAmount, 2),
-            'balance' => round($totalPropertyPrice - $consumedAmount, 2),
+            'balance' => round($balance, 2),
+
             'expenses_count' => (clone $expensesQuery)->count(),
-            'properties_count' => Property::query()
-                ->where(function (Builder $query) {
-                    $query
-                        ->whereNull('status')
-                        ->orWhere('status', '!=', 'inactive');
-                })
-                ->count(),
+
+            // Existing key now shows properties that actually paid.
+            'properties_count' => $paidPropertiesCount,
+            'paid_properties_count' => $paidPropertiesCount,
+            'registered_properties_count' => $registeredPropertiesCount,
+
+            'paid_invoices_count' => (clone $paidInvoicesQuery)->count(),
+            'unpaid_invoices_count' => (clone $unpaidInvoicesQuery)->count(),
+
             'paid_expenses_count' => (clone $expensesQuery)->where('status', 'paid')->count(),
             'pending_expenses_count' => (clone $expensesQuery)->where('status', 'pending')->count(),
             'overdue_expenses_count' => (clone $expensesQuery)->where('status', 'overdue')->count(),
+
             'from_date' => $fromDate->toDateString(),
             'to_date' => $toDate->toDateString(),
             'date_from' => $fromDate->toDateString(),
@@ -818,6 +868,7 @@ class ExpenseController extends Controller
             'month_label' => $fromDate->format('M d, Y') . ' - ' . $toDate->format('M d, Y'),
             'period_label' => $fromDate->format('M d, Y') . ' - ' . $toDate->format('M d, Y'),
             'month_count' => $monthCount,
+            'balance_source' => 'paid_property_invoices_only',
         ];
     }
 
