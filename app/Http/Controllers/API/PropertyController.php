@@ -3,7 +3,10 @@
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\API\BaseController as BaseController;
+use App\Models\Expense;
+use App\Models\MonthlyFinancialSnapshot;
 use App\Models\Property;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
@@ -60,6 +63,88 @@ class PropertyController extends BaseController
         });
 
         return $this->sendResponse($properties, 'Properties retrieved successfully.');
+    }
+
+    /**
+     * Monthly finance summary.
+     *
+     * Example:
+     * GET /api/properties/monthly-finance?month=2026-01
+     *
+     * This allows frontend to check current month and previous months.
+     */
+    public function monthlyFinance(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'month' => ['nullable', 'date_format:Y-m'],
+            'refresh' => ['nullable', 'boolean'],
+        ]);
+
+        if ($validator->fails()) {
+            return $this->sendError('Validation Error.', $validator->errors(), 422);
+        }
+
+        $month = $request->get('month', now()->format('Y-m'));
+        $refresh = (bool) $request->boolean('refresh', false);
+
+        $currentMonth = now()->format('Y-m');
+        $isPastMonth = $month < $currentMonth;
+
+        /**
+         * If previous month already has snapshot, return saved snapshot.
+         * This protects old balance from changing later when property price changes.
+         */
+        if ($isPastMonth && !$refresh) {
+            $snapshot = MonthlyFinancialSnapshot::where('month', $month)->first();
+
+            if ($snapshot) {
+                return $this->sendResponse([
+                    'month' => $snapshot->month,
+                    'period_label' => Carbon::createFromFormat('Y-m', $snapshot->month)->format('F Y'),
+                    'total_available_balance' => (float) $snapshot->total_available_balance,
+                    'consumed_amount' => (float) $snapshot->consumed_amount,
+                    'balance' => (float) $snapshot->balance,
+                    'properties_count' => (int) $snapshot->properties_count,
+                    'expenses_count' => (int) $snapshot->expenses_count,
+                    'paid_expenses_count' => (int) $snapshot->paid_expenses_count,
+                    'pending_expenses_count' => (int) $snapshot->pending_expenses_count,
+                    'overdue_expenses_count' => (int) $snapshot->overdue_expenses_count,
+                    'is_closed' => true,
+                    'source' => 'snapshot',
+                    'closed_at' => $snapshot->closed_at,
+                ], 'Monthly finance snapshot retrieved successfully.');
+            }
+        }
+
+        $summary = $this->calculateMonthlyFinance($month);
+
+        /**
+         * For previous months, save the result as a closed snapshot.
+         * Current month remains live because expenses can still be added.
+         */
+        if ($isPastMonth) {
+            MonthlyFinancialSnapshot::updateOrCreate(
+                ['month' => $month],
+                [
+                    'total_available_balance' => $summary['total_available_balance'],
+                    'consumed_amount' => $summary['consumed_amount'],
+                    'balance' => $summary['balance'],
+                    'properties_count' => $summary['properties_count'],
+                    'expenses_count' => $summary['expenses_count'],
+                    'paid_expenses_count' => $summary['paid_expenses_count'],
+                    'pending_expenses_count' => $summary['pending_expenses_count'],
+                    'overdue_expenses_count' => $summary['overdue_expenses_count'],
+                    'is_closed' => true,
+                    'source' => 'snapshot',
+                    'closed_at' => now(),
+                ]
+            );
+
+            $summary['is_closed'] = true;
+            $summary['source'] = 'snapshot';
+        }
+
+        return $this->sendResponse($summary, 'Monthly finance retrieved successfully.');
     }
 
     /**
@@ -207,6 +292,78 @@ class PropertyController extends BaseController
     }
 
     /**
+     * Calculate monthly finance from properties and expenses.
+     */
+    private function calculateMonthlyFinance(string $month): array
+    {
+        $startDate = Carbon::createFromFormat('Y-m', $month)->startOfMonth();
+        $endDate = Carbon::createFromFormat('Y-m', $month)->endOfMonth();
+
+        /**
+         * We count all active properties as monthly available balance.
+         * If you want to count only booked properties, change this to:
+         * ->where('status', 'fully_booked')
+         */
+        $propertiesQuery = Property::query()
+            ->where(function ($query) {
+                $query->whereNull('status')
+                    ->orWhere('status', '!=', 'inactive');
+            });
+
+        $propertiesCount = (clone $propertiesQuery)->count();
+
+        $totalAvailableBalance = (float) (clone $propertiesQuery)->sum('price');
+
+        $expensesQuery = Expense::query()
+            ->whereBetween('expense_date', [
+                $startDate->toDateString(),
+                $endDate->toDateString(),
+            ]);
+
+        $expensesCount = (clone $expensesQuery)->count();
+
+        $paidExpensesCount = (clone $expensesQuery)
+            ->where('status', 'Paid')
+            ->count();
+
+        $pendingExpensesCount = (clone $expensesQuery)
+            ->where('status', 'Pending')
+            ->count();
+
+        $overdueExpensesCount = (clone $expensesQuery)
+            ->where('status', 'Overdue')
+            ->count();
+
+        /**
+         * Consumed amount uses all expense statuses.
+         * If you only want Paid expenses to affect balance, add:
+         * ->where('status', 'Paid')
+         */
+        $consumedAmount = (float) (clone $expensesQuery)->sum('amount');
+
+        $balance = $totalAvailableBalance - $consumedAmount;
+
+        $currentMonth = now()->format('Y-m');
+
+        return [
+            'month' => $month,
+            'period_label' => $startDate->format('F Y'),
+            'start_date' => $startDate->toDateString(),
+            'end_date' => $endDate->toDateString(),
+            'total_available_balance' => round($totalAvailableBalance, 2),
+            'consumed_amount' => round($consumedAmount, 2),
+            'balance' => round($balance, 2),
+            'properties_count' => $propertiesCount,
+            'expenses_count' => $expensesCount,
+            'paid_expenses_count' => $paidExpensesCount,
+            'pending_expenses_count' => $pendingExpensesCount,
+            'overdue_expenses_count' => $overdueExpensesCount,
+            'is_closed' => $month < $currentMonth,
+            'source' => 'live',
+        ];
+    }
+
+    /**
      * Convert model to frontend-friendly structure.
      */
     private function transformProperty(Property $property): array
@@ -236,6 +393,11 @@ class PropertyController extends BaseController
     private function generateUniqueSlug(string $title, ?int $ignoreId = null): string
     {
         $baseSlug = Str::slug($title);
+
+        if ($baseSlug === '') {
+            $baseSlug = 'property';
+        }
+
         $slug = $baseSlug;
         $counter = 1;
 
