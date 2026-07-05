@@ -3,16 +3,22 @@
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
+use App\Models\BusinessRequest;
 use App\Models\Salary;
 use App\Models\User;
+use App\Notifications\BusinessRequestCreatedNotification;
 use App\Services\TargetScoreService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 class SalaryController extends Controller
 {
@@ -25,6 +31,14 @@ class SalaryController extends Controller
         'dizonebusiness@gmail.com',
         'cyubahirod10@gmail.com',
         'amos5harry@gmail.com',
+    ];
+
+    /**
+     * People who receive email notification when payroll request is pushed.
+     */
+    private const PAYROLL_REQUEST_NOTIFICATION_EMAILS = [
+        'hotelandsafari@gmail.com',
+        'shyakas83@gmail.com',
     ];
 
     public function __construct(
@@ -100,9 +114,157 @@ class SalaryController extends Controller
                 ],
                 'workers_count' => $calculations->count(),
                 'summary' => $this->buildPayrollSummary($calculations),
+                'payroll_request' => $this->transformPayrollRequest(
+                    $this->findPayrollRequest($fromDate, $toDate)
+                ),
                 'calculations' => $calculations,
             ],
         ]);
+    }
+
+    /**
+     * Push the calculated payroll total into the Request module.
+     *
+     * This creates one pending salary request for the selected date range.
+     * It is idempotent: if a pending/approved payroll request already exists
+     * for the same period, the method returns that request instead of creating
+     * a duplicate.
+     */
+    public function pushPayrollRequest(Request $request): JsonResponse
+    {
+        $authUser = $request->user();
+
+        if (!$this->canManageSalaries($authUser)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You are not allowed to push payroll requests.',
+            ], 403);
+        }
+
+        $validated = $request->validate([
+            'month' => ['nullable', 'date_format:Y-m'],
+            'from_date' => ['nullable', 'date'],
+            'to_date' => ['nullable', 'date', 'after_or_equal:from_date'],
+            'date_from' => ['nullable', 'date'],
+            'date_to' => ['nullable', 'date', 'after_or_equal:date_from'],
+            'priority' => ['nullable', 'in:normal,elevated,urgent'],
+            'expected_date' => ['nullable', 'date'],
+            'review_note' => ['nullable', 'string', 'max:3000'],
+            'force' => ['nullable', 'boolean'],
+        ]);
+
+        [$fromDate, $toDate] = $this->resolvePayrollDateRange($validated);
+
+        $workers = $this->resolveWorkers($authUser, null);
+
+        $calculations = $workers
+            ->map(fn (User $worker) => $this->calculateForWorker(
+                worker: $worker,
+                fromDate: $fromDate,
+                toDate: $toDate,
+                includeTasks: false
+            ))
+            ->values();
+
+        $summary = $this->buildPayrollSummary($calculations);
+        $payrollAmount = round((float) ($summary['total_earned_salary'] ?? 0), 2);
+
+        if ($payrollAmount <= 0) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Payroll request was not created because earned salary total is zero.',
+                'data' => [
+                    'period' => $this->payrollPeriodPayload($fromDate, $toDate),
+                    'summary' => $summary,
+                ],
+            ], 422);
+        }
+
+        $existingRequest = $this->findPayrollRequest($fromDate, $toDate);
+
+        if ($existingRequest && $existingRequest->status !== 'rejected' && !$request->boolean('force')) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Payroll request already exists for this selected period.',
+                'data' => [
+                    'request' => $this->transformPayrollRequest($existingRequest),
+                    'period' => $this->payrollPeriodPayload($fromDate, $toDate),
+                    'summary' => $summary,
+                    'already_exists' => true,
+                ],
+            ]);
+        }
+
+        if ($existingRequest && $existingRequest->status === 'approved') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Approved payroll request cannot be replaced.',
+                'data' => [
+                    'request' => $this->transformPayrollRequest($existingRequest),
+                    'period' => $this->payrollPeriodPayload($fromDate, $toDate),
+                ],
+            ], 422);
+        }
+
+        $businessRequest = DB::transaction(function () use (
+            $authUser,
+            $validated,
+            $fromDate,
+            $toDate,
+            $summary,
+            $payrollAmount,
+            $existingRequest
+        ) {
+            $payload = [
+                'property_id' => null,
+                'property_name' => 'ASHBHUB Payroll',
+                'requested_by' => $authUser?->id,
+                'request_type' => 'salary',
+                'title' => $this->payrollRequestTitle($fromDate, $toDate),
+                'description' => $this->buildPayrollRequestDescription($fromDate, $toDate, $summary),
+                'amount' => $payrollAmount,
+                'priority' => Str::lower((string) ($validated['priority'] ?? 'normal')),
+                'status' => 'pending',
+                'expected_date' => filled($validated['expected_date'] ?? null)
+                    ? Carbon::parse((string) $validated['expected_date'])->toDateString()
+                    : $toDate->toDateString(),
+            ];
+
+            if ($existingRequest && $existingRequest->status === 'rejected') {
+                $payload['request_code'] = $this->generateRequestCode();
+
+                return BusinessRequest::query()->create($payload);
+            }
+
+            if ($existingRequest) {
+                $existingRequest->update($payload);
+
+                return $existingRequest->refresh();
+            }
+
+            $payload['request_code'] = $this->generateRequestCode();
+
+            return BusinessRequest::query()->create($payload);
+        });
+
+        $businessRequest->load([
+            'requester:id,first_name,last_name,email',
+            'reviewer:id,first_name,last_name,email',
+            'expense:id,expense_code,amount,status,expense_date',
+        ]);
+
+        $this->notifyPayrollRequestRecipients($businessRequest);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Payroll request pushed successfully.',
+            'data' => [
+                'request' => $this->transformPayrollRequest($businessRequest),
+                'period' => $this->payrollPeriodPayload($fromDate, $toDate),
+                'summary' => $summary,
+                'already_exists' => false,
+            ],
+        ], 201);
     }
 
     /**
@@ -615,6 +777,162 @@ class SalaryController extends Controller
                 ->count(),
             'salary_rule' => 'Most salaries are calculated from completed and rewarded tasks. Selected staff emails receive full configured monthly salary.',
         ];
+    }
+
+    /**
+     * Find a payroll request for a selected period.
+     */
+    private function findPayrollRequest(Carbon $fromDate, Carbon $toDate): ?BusinessRequest
+    {
+        if (!Schema::hasTable('business_requests')) {
+            return null;
+        }
+
+        return BusinessRequest::query()
+            ->where('request_type', 'salary')
+            ->where('title', $this->payrollRequestTitle($fromDate, $toDate))
+            ->whereIn('status', ['pending', 'approved', 'rejected'])
+            ->latest('id')
+            ->first();
+    }
+
+    /**
+     * Transform payroll request details for the frontend.
+     */
+    private function transformPayrollRequest(?BusinessRequest $businessRequest): ?array
+    {
+        if (!$businessRequest) {
+            return null;
+        }
+
+        $businessRequest->loadMissing([
+            'requester:id,first_name,last_name,email',
+            'reviewer:id,first_name,last_name,email',
+            'expense:id,expense_code,amount,status,expense_date',
+        ]);
+
+        return [
+            'id' => $businessRequest->id,
+            'request_id' => $businessRequest->request_code,
+            'title' => $businessRequest->title,
+            'request_type' => $businessRequest->request_type,
+            'request_type_label' => 'Salary Request',
+            'amount' => round((float) ($businessRequest->amount ?? 0), 2),
+            'priority' => $businessRequest->priority,
+            'status' => $businessRequest->status,
+            'status_label' => Str::headline((string) $businessRequest->status),
+            'expected_date' => $businessRequest->expected_date
+                ? Carbon::parse($businessRequest->expected_date)->toDateString()
+                : null,
+            'requested_by' => $businessRequest->requested_by,
+            'requested_by_name' => $businessRequest->requester
+                ? trim(($businessRequest->requester->first_name ?? '') . ' ' . ($businessRequest->requester->last_name ?? ''))
+                : null,
+            'reviewed_by' => $businessRequest->reviewed_by,
+            'reviewed_by_name' => $businessRequest->reviewer
+                ? trim(($businessRequest->reviewer->first_name ?? '') . ' ' . ($businessRequest->reviewer->last_name ?? ''))
+                : null,
+            'expense_id' => $businessRequest->expense_id,
+            'expense' => $businessRequest->expense
+                ? [
+                    'id' => $businessRequest->expense->id,
+                    'expense_id' => $businessRequest->expense->expense_code,
+                    'amount' => round((float) ($businessRequest->expense->amount ?? 0), 2),
+                    'status' => Str::headline((string) $businessRequest->expense->status),
+                    'date' => $businessRequest->expense->expense_date
+                        ? Carbon::parse($businessRequest->expense->expense_date)->toDateString()
+                        : null,
+                ]
+                : null,
+            'created_at' => $businessRequest->created_at,
+            'updated_at' => $businessRequest->updated_at,
+        ];
+    }
+
+    /**
+     * Title used to identify one payroll request per selected period.
+     */
+    private function payrollRequestTitle(Carbon $fromDate, Carbon $toDate): string
+    {
+        return 'Payroll Request - '
+            . $fromDate->toDateString()
+            . ' to '
+            . $toDate->toDateString();
+    }
+
+    /**
+     * Period payload for API responses.
+     */
+    private function payrollPeriodPayload(Carbon $fromDate, Carbon $toDate): array
+    {
+        return [
+            'from' => $fromDate->toDateString(),
+            'to' => $toDate->toDateString(),
+            'label' => $fromDate->format('M d, Y') . ' - ' . $toDate->format('M d, Y'),
+        ];
+    }
+
+    /**
+     * Description saved in the salary request.
+     */
+    private function buildPayrollRequestDescription(
+        Carbon $fromDate,
+        Carbon $toDate,
+        array $summary
+    ): string {
+        return implode("\n", [
+            'Payroll period: ' . $fromDate->toDateString() . ' to ' . $toDate->toDateString(),
+            'Workers: ' . (int) ($summary['workers_count'] ?? 0),
+            'Configured salaries: ' . (int) ($summary['salary_configured_count'] ?? 0),
+            'Base salary total: ' . number_format((float) ($summary['total_base_salary'] ?? 0), 0, '.', ',') . ' RWF',
+            'Earned salary total: ' . number_format((float) ($summary['total_earned_salary'] ?? 0), 0, '.', ',') . ' RWF',
+            'Deduction total: ' . number_format((float) ($summary['total_deduction_amount'] ?? 0), 0, '.', ',') . ' RWF',
+            'Rewarded completed tasks: ' . (int) ($summary['rewarded_completed_tasks_count'] ?? 0),
+            'Generated automatically from payroll calculations.',
+        ]);
+    }
+
+    /**
+     * Notify finance/management when a payroll request is pushed.
+     */
+    private function notifyPayrollRequestRecipients(BusinessRequest $businessRequest): void
+    {
+        if (!class_exists(BusinessRequestCreatedNotification::class)) {
+            return;
+        }
+
+        try {
+            foreach (self::PAYROLL_REQUEST_NOTIFICATION_EMAILS as $email) {
+                if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                    continue;
+                }
+
+                Notification::route('mail', $email)
+                    ->notify(new BusinessRequestCreatedNotification($businessRequest));
+            }
+        } catch (Throwable $exception) {
+            Log::warning('Payroll request email notification failed.', [
+                'request_id' => $businessRequest->id,
+                'request_code' => $businessRequest->request_code,
+                'error' => $exception->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Generate request code compatible with RequestController.
+     */
+    private function generateRequestCode(): string
+    {
+        $year = now()->format('Y');
+        $nextNumber = ((int) BusinessRequest::query()->max('id')) + 1;
+
+        do {
+            $code = sprintf('R-%s-%05d', $year, $nextNumber);
+            $nextNumber++;
+        } while (BusinessRequest::query()->where('request_code', $code)->exists());
+
+        return $code;
     }
 
     /**

@@ -368,6 +368,11 @@ Route::middleware('auth:sanctum')->group(function () {
         );
 
         Route::post(
+            'salaries/payroll-request',
+            'pushPayrollRequest'
+        );
+
+        Route::post(
             'salaries',
             'store'
         );
