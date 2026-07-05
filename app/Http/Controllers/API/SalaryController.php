@@ -16,6 +16,17 @@ use Illuminate\Validation\ValidationException;
 
 class SalaryController extends Controller
 {
+    /**
+     * Staff members paid full configured monthly salary.
+     * These users are not paid based on completed/rewarded task count.
+     */
+    private const FULL_MONTHLY_SALARY_EMAILS = [
+        'shyakas83@gmail.com',
+        'dizonebusiness@gmail.com',
+        'cyubahirod10@gmail.com',
+        'amos5harry@gmail.com',
+    ];
+
     public function __construct(
         private readonly TargetScoreService $targetScoreService
     ) {
@@ -271,6 +282,7 @@ class SalaryController extends Controller
         );
 
         $salary = $this->resolveSalaryForMonth($worker, $monthStart);
+        $isFullMonthlySalaryStaff = $this->isFullMonthlySalaryStaff($worker);
 
         $minimumTasks = max(1, (int) data_get($targetScore, 'target.minimum_tasks', 1));
         $targetPercentage = $this->clampPercentage(
@@ -306,12 +318,21 @@ class SalaryController extends Controller
 
         $salaryProgress = min($rewardedQuantityProgress, $rewardScoreTargetProgress);
 
-        $fullSalaryEarned = $salary !== null
-            && $rewardedCompletedTasks >= $minimumTasks
-            && ($targetPercentage <= 0 || $rewardAverageMarks >= $targetPercentage);
-
-        if ($fullSalaryEarned) {
+        if ($isFullMonthlySalaryStaff && $salary !== null) {
+            /*
+             * These staff members receive their full configured monthly salary.
+             * Their payroll is not reduced by task quantity or reward score.
+             */
             $salaryProgress = 100.0;
+            $fullSalaryEarned = true;
+        } else {
+            $fullSalaryEarned = $salary !== null
+                && $rewardedCompletedTasks >= $minimumTasks
+                && ($targetPercentage <= 0 || $rewardAverageMarks >= $targetPercentage);
+
+            if ($fullSalaryEarned) {
+                $salaryProgress = 100.0;
+            }
         }
 
         $baseSalary = $salary ? (float) $salary->base_salary : null;
@@ -338,7 +359,10 @@ class SalaryController extends Controller
         $performance['reward_average_marks_percentage'] = round($rewardAverageMarks, 2);
         $performance['rewarded_quantity_progress_percentage'] = round($rewardedQuantityProgress, 2);
         $performance['reward_score_target_progress_percentage'] = round($rewardScoreTargetProgress, 2);
-        $performance['salary_rule'] = 'completed_and_rewarded_tasks_only';
+        $performance['salary_rule'] = $isFullMonthlySalaryStaff
+            ? 'fixed_monthly_salary_staff'
+            : 'completed_and_rewarded_tasks_only';
+        $performance['fixed_monthly_salary_staff'] = $isFullMonthlySalaryStaff;
         $performance['target_met'] = $fullSalaryEarned;
 
         return [
@@ -371,10 +395,16 @@ class SalaryController extends Controller
                 'earned_salary' => $earnedSalary,
                 'deduction_amount' => $deductionAmount,
                 'full_salary_earned' => $fullSalaryEarned,
+                'is_fixed_monthly_salary_staff' => $isFullMonthlySalaryStaff,
+                'salary_type' => $isFullMonthlySalaryStaff
+                    ? 'fixed_monthly_staff'
+                    : 'task_reward_based',
                 'status' => $salary === null
                     ? 'salary_not_configured'
                     : ($fullSalaryEarned ? 'full_salary_earned' : 'partial_salary_earned'),
-                'rule' => 'Salary is calculated from tasks that are both completed and rewarded within the selected date range.',
+                'rule' => $isFullMonthlySalaryStaff
+                    ? 'This staff member receives full configured monthly salary. Tasks do not reduce salary.'
+                    : 'Salary is calculated from tasks that are both completed and rewarded within the selected date range.',
             ],
             'tasks' => $includeTasks ? $completedStats['tasks'] : [],
             'rewarded_tasks' => $includeTasks ? $rewardStats['tasks'] : [],
@@ -583,7 +613,7 @@ class SalaryController extends Controller
             'salary_not_configured_count' => $calculations
                 ->filter(fn ($row) => data_get($row, 'payment.status') === 'salary_not_configured')
                 ->count(),
-            'salary_rule' => 'Salary is calculated from tasks that are completed and rewarded within the selected date range.',
+            'salary_rule' => 'Most salaries are calculated from completed and rewarded tasks. Selected staff emails receive full configured monthly salary.',
         ];
     }
 
@@ -683,6 +713,16 @@ class SalaryController extends Controller
         ], true) || in_array((int) $user->role_id, [1, 2], true);
     }
 
+
+    /**
+     * Check if user is paid full configured monthly salary instead of task-based salary.
+     */
+    private function isFullMonthlySalaryStaff(User $worker): bool
+    {
+        $email = strtolower(trim((string) $worker->email));
+
+        return in_array($email, self::FULL_MONTHLY_SALARY_EMAILS, true);
+    }
 
     /**
      * Normalize role names/slugs.
