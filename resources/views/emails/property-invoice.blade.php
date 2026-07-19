@@ -12,6 +12,23 @@
 
     $logoUrl = rtrim(config('app.url'), '/') . '/ashbhub-logo.png';
 
+    /*
+     * The controller may pass $paymentUrl directly.
+     * Otherwise, the email falls back to a frontend payment page.
+     *
+     * Configure APP_FRONTEND_URL in .env when the frontend and API
+     * are hosted on different domains.
+     */
+    $frontendUrl = rtrim(
+        (string) env('APP_FRONTEND_URL', config('app.url')),
+        '/'
+    );
+
+    $paymentUrl = $paymentUrl
+        ?? $invoice->payment_url
+        ?? $invoice->checkout_url
+        ?? $frontendUrl . '/invoices/' . $invoice->id . '/pay';
+
     $title = $isReminder ? 'Payment Reminder' : 'Invoice Notice';
 
     if ($isReminder && $daysBeforeDue === 0) {
@@ -29,7 +46,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>{{ $invoice->invoice_number }}</title>
+    <title>{{ $title }} - {{ $propertyName }}</title>
 </head>
 
 <body style="margin:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;color:#111827;">
@@ -66,12 +83,12 @@
                         </td>
 
                         <td style="text-align:right;vertical-align:middle;">
-                            <div style="font-size:13px;font-weight:700;color:#6b7280;">
-                                Invoice No.
+                            <div style="font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#6b7280;">
+                                Amount Due
                             </div>
 
-                            <div style="font-size:17px;font-weight:900;color:#111827;margin-top:5px;">
-                                {{ $invoice->invoice_number }}
+                            <div style="font-size:20px;font-weight:900;color:#ea580c;margin-top:6px;white-space:nowrap;">
+                                {{ $currency }} {{ $amount }}
                             </div>
                         </td>
                     </tr>
@@ -205,6 +222,37 @@
                         </tr>
                     </tbody>
                 </table>
+
+                @if (strtolower((string) $invoice->payment_status) !== 'paid')
+                    <table
+                        role="presentation"
+                        width="100%"
+                        cellpadding="0"
+                        cellspacing="0"
+                        style="margin-top:28px;"
+                    >
+                        <tr>
+                            <td align="center">
+                                <a
+                                    href="{{ $paymentUrl }}"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style="display:inline-block;background:#ea580c;color:#ffffff;text-decoration:none;font-size:15px;font-weight:900;letter-spacing:.4px;padding:15px 34px;border-radius:12px;box-shadow:0 8px 18px rgba(234,88,12,.22);"
+                                >
+                                    Pay Now
+                                </a>
+                            </td>
+                        </tr>
+                    </table>
+
+                    <p style="margin:14px 0 0;text-align:center;font-size:12px;line-height:1.6;color:#6b7280;">
+                        Use the secure payment button above to complete this invoice.
+                    </p>
+                @else
+                    <div style="margin-top:28px;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:12px;padding:15px 18px;text-align:center;font-size:14px;font-weight:900;color:#047857;">
+                        Payment completed
+                    </div>
+                @endif
 
                 <p style="margin:26px 0 0;font-size:14px;line-height:1.8;color:#4b5563;">
                     Please contact our billing team if this payment has already been completed or if you need assistance regarding this invoice.

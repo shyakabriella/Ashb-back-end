@@ -20,7 +20,6 @@ class Property extends Model
         'manager_name',
         'manager_email',
         'property_email',
-        'contract_signed_date',
         'payment_due_day',
         'auto_invoice_enabled',
         'units',
@@ -32,7 +31,6 @@ class Property extends Model
 
     protected $casts = [
         'price' => 'decimal:2',
-        'contract_signed_date' => 'date:Y-m-d',
         'units' => 'integer',
         'occupancy' => 'integer',
         'payment_due_day' => 'integer',
@@ -41,7 +39,6 @@ class Property extends Model
     ];
 
     protected $attributes = [
-        'contract_signed_date' => null,
         'occupancy' => 0,
         'status' => 'available',
         'payment_due_day' => null,
