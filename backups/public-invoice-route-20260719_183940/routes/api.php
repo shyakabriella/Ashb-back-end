@@ -78,18 +78,6 @@ Route::get(
 |
 */
 
-
-
-/*
-|--------------------------------------------------------------------------
-| Public invoice payment information
-|--------------------------------------------------------------------------
-|
-| Customers using the Pay with Bank Card button are not authenticated.
-| Only safe invoice information is returned by publicShow().
-|
-*/
-
 Route::get(
     'invoices/{invoice}/public',
     [InvoiceController::class, 'publicShow']
