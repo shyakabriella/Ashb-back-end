@@ -30,17 +30,12 @@ Route::get('/', function () {
     ->whereNumber('invoice')
     ->name('invoices.pay.redirect');
 
-/*
-|--------------------------------------------------------------------------
-| PesaPal payment callback
-|--------------------------------------------------------------------------
-*/
-
 \Illuminate\Support\Facades\Route::get(
     '/pesapal/callback',
     [
-        \App\Http\Controllers\API\PesapalPaymentController::class,
+        \App\Http\Controllers\API
+            \PesapalPaymentController::class,
         'callback',
     ]
-)
-    ->name('pesapal.callback');
+)->name('pesapal.callback');
+

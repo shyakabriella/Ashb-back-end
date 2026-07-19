@@ -5,7 +5,6 @@ use App\Http\Controllers\API\ClientController;
 use App\Http\Controllers\API\ProfileController;
 use App\Http\Controllers\API\PropertyController;
 use App\Http\Controllers\API\InvoiceController;
-use App\Http\Controllers\API\PesapalPaymentController;
 use App\Http\Controllers\API\RegisterController;
 use App\Http\Controllers\API\RoleController;
 use App\Http\Controllers\API\TaskController;
@@ -98,48 +97,6 @@ Route::get(
     ->whereNumber('invoice')
     ->middleware('throttle:60,1')
     ->name('invoices.public.show');
-
-
-/*
-|--------------------------------------------------------------------------
-| Public PesaPal invoice payment
-|--------------------------------------------------------------------------
-*/
-
-Route::post(
-    'pesapal/invoices/{invoice}/initialize',
-    [
-        PesapalPaymentController::class,
-        'initialize',
-    ]
-)
-    ->whereNumber('invoice')
-    ->middleware('throttle:15,1')
-    ->name('pesapal.invoices.initialize');
-
-Route::match(
-    ['get', 'post'],
-    'pesapal/ipn',
-    [
-        PesapalPaymentController::class,
-        'ipn',
-    ]
-)
-    ->middleware('throttle:120,1')
-    ->name('pesapal.ipn');
-
-Route::post(
-    'pesapal/register-ipn',
-    [
-        PesapalPaymentController::class,
-        'registerIpn',
-    ]
-)
-    ->middleware([
-        'auth:sanctum',
-        'throttle:5,1',
-    ])
-    ->name('pesapal.register-ipn');
 
 Route::middleware('auth:sanctum')->group(function () {
     /*
