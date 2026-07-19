@@ -67,25 +67,6 @@ Route::get(
 |--------------------------------------------------------------------------
 */
 
-
-/*
-|--------------------------------------------------------------------------
-| Public invoice payment details
-|--------------------------------------------------------------------------
-|
-| Customers opening the Pay with Bank Card link are not logged into the
-| management dashboard. This route returns only safe invoice information.
-|
-*/
-
-Route::get(
-    'invoices/{invoice}/public',
-    [InvoiceController::class, 'publicShow']
-)
-    ->whereNumber('invoice')
-    ->middleware('throttle:60,1')
-    ->name('invoices.public.show');
-
 Route::middleware('auth:sanctum')->group(function () {
     /*
     |--------------------------------------------------------------------------
