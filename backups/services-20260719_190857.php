@@ -43,48 +43,4 @@ return [
         'use_ai' => env('GEMINI_USE_AI', true),
     ],
 
-
-    /*
-    |--------------------------------------------------------------------------
-    | PesaPal API 3.0
-    |--------------------------------------------------------------------------
-    */
-
-    'pesapal' => [
-        'environment' => env(
-            'PESAPAL_ENVIRONMENT',
-            'sandbox'
-        ),
-
-        'consumer_key' => env(
-            'PESAPAL_CONSUMER_KEY'
-        ),
-
-        'consumer_secret' => env(
-            'PESAPAL_CONSUMER_SECRET'
-        ),
-
-        'ipn_id' => env(
-            'PESAPAL_IPN_ID'
-        ),
-
-        'callback_url' => env(
-            'PESAPAL_CALLBACK_URL'
-        ),
-
-        'ipn_url' => env(
-            'PESAPAL_IPN_URL'
-        ),
-
-        'cancellation_url' => env(
-            'PESAPAL_CANCELLATION_URL'
-        ),
-
-        'sandbox_url' =>
-            'https://cybqa.pesapal.com/pesapalv3',
-
-        'live_url' =>
-            'https://pay.pesapal.com/v3',
-    ],
-
 ];

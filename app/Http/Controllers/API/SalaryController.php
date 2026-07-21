@@ -3,34 +3,64 @@
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
+use App\Models\BusinessRequest;
 use App\Models\Salary;
 use App\Models\User;
+use App\Notifications\BusinessRequestCreatedNotification;
 use App\Services\TargetScoreService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 class SalaryController extends Controller
 {
+    /**
+     * Staff members paid full configured monthly salary.
+     * These users are not paid based on completed/rewarded task count.
+     */
+    private const FULL_MONTHLY_SALARY_EMAILS = [
+        'shyakas83@gmail.com',
+        'dizonebusiness@gmail.com',
+        'cyubahirod10@gmail.com',
+        'amos5harry@gmail.com',
+    ];
+
+    /**
+     * People who receive email notification when payroll request is pushed.
+     */
+    private const PAYROLL_REQUEST_NOTIFICATION_EMAILS = [
+        'hotelandsafari@gmail.com',
+        'shyakas83@gmail.com',
+    ];
+
     public function __construct(
         private readonly TargetScoreService $targetScoreService
     ) {
     }
 
     /**
-     * List calculated monthly salaries.
+     * List calculated monthly payroll salaries.
      *
      * Rules:
-     * - Employee/Intern sees only their own salary calculation.
-     * - CEO/MD/Admin can see all workers or one selected worker.
-     * - Salary calculation uses the existing monthly TargetScoreService.
+     * - Non-manager users see only their own salary calculation.
+     * - CEO/MD/Admin sees all active users or one selected active user.
+     * - Salary is earned from completed AND rewarded tasks only.
+     * - A completed task without reward does not increase payroll salary.
      *
      * Query params:
-     * - month=2026-06
+     * - from_date=2026-07-01
+     * - to_date=2026-07-31
+     * - month=2026-07 (fallback/backward compatibility)
      * - user_id=5
-     * - include_tasks=1 (task breakdown is returned only for one worker)
+     * - include_tasks=1
      */
     public function index(Request $request): JsonResponse
     {
@@ -45,12 +75,15 @@ class SalaryController extends Controller
 
         $validated = $request->validate([
             'month' => ['nullable', 'date_format:Y-m'],
+            'from_date' => ['nullable', 'date'],
+            'to_date' => ['nullable', 'date', 'after_or_equal:from_date'],
+            'date_from' => ['nullable', 'date'],
+            'date_to' => ['nullable', 'date', 'after_or_equal:date_from'],
             'user_id' => ['nullable', 'integer', 'exists:users,id'],
             'include_tasks' => ['nullable', 'boolean'],
         ]);
 
-        $month = $validated['month'] ?? now()->format('Y-m');
-        $monthStart = Carbon::parse($month . '-01')->startOfMonth()->startOfDay();
+        [$fromDate, $toDate] = $this->resolvePayrollDateRange($validated);
         $requestedUserId = isset($validated['user_id'])
             ? (int) $validated['user_id']
             : null;
@@ -61,7 +94,8 @@ class SalaryController extends Controller
         $calculations = $workers
             ->map(fn (User $worker) => $this->calculateForWorker(
                 worker: $worker,
-                monthStart: $monthStart,
+                fromDate: $fromDate,
+                toDate: $toDate,
                 includeTasks: $includeTasks
             ))
             ->values();
@@ -70,18 +104,171 @@ class SalaryController extends Controller
             'success' => true,
             'message' => 'Monthly salary calculations fetched successfully.',
             'data' => [
-                'month' => $monthStart->format('Y-m'),
+                'month' => $fromDate->format('Y-m'),
+                'from_date' => $fromDate->toDateString(),
+                'to_date' => $toDate->toDateString(),
+                'period' => [
+                    'from' => $fromDate->toDateString(),
+                    'to' => $toDate->toDateString(),
+                    'label' => $fromDate->format('M d, Y') . ' - ' . $toDate->format('M d, Y'),
+                ],
                 'workers_count' => $calculations->count(),
+                'summary' => $this->buildPayrollSummary($calculations),
+                'payroll_request' => $this->transformPayrollRequest(
+                    $this->findPayrollRequest($fromDate, $toDate)
+                ),
                 'calculations' => $calculations,
             ],
         ]);
     }
 
     /**
-     * Create or replace one worker's salary effective from a selected month.
+     * Push the calculated payroll total into the Request module.
      *
-     * A salary saved for 2026-06 applies to June 2026 and future months until
-     * another salary is saved for a later month.
+     * This creates one pending salary request for the selected date range.
+     * It is idempotent: if a pending/approved payroll request already exists
+     * for the same period, the method returns that request instead of creating
+     * a duplicate.
+     */
+    public function pushPayrollRequest(Request $request): JsonResponse
+    {
+        $authUser = $request->user();
+
+        if (!$this->canManageSalaries($authUser)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You are not allowed to push payroll requests.',
+            ], 403);
+        }
+
+        $validated = $request->validate([
+            'month' => ['nullable', 'date_format:Y-m'],
+            'from_date' => ['nullable', 'date'],
+            'to_date' => ['nullable', 'date', 'after_or_equal:from_date'],
+            'date_from' => ['nullable', 'date'],
+            'date_to' => ['nullable', 'date', 'after_or_equal:date_from'],
+            'priority' => ['nullable', 'in:normal,elevated,urgent'],
+            'expected_date' => ['nullable', 'date'],
+            'review_note' => ['nullable', 'string', 'max:3000'],
+            'force' => ['nullable', 'boolean'],
+        ]);
+
+        [$fromDate, $toDate] = $this->resolvePayrollDateRange($validated);
+
+        $workers = $this->resolveWorkers($authUser, null);
+
+        $calculations = $workers
+            ->map(fn (User $worker) => $this->calculateForWorker(
+                worker: $worker,
+                fromDate: $fromDate,
+                toDate: $toDate,
+                includeTasks: false
+            ))
+            ->values();
+
+        $summary = $this->buildPayrollSummary($calculations);
+        $payrollAmount = round((float) ($summary['total_earned_salary'] ?? 0), 2);
+
+        if ($payrollAmount <= 0) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Payroll request was not created because earned salary total is zero.',
+                'data' => [
+                    'period' => $this->payrollPeriodPayload($fromDate, $toDate),
+                    'summary' => $summary,
+                ],
+            ], 422);
+        }
+
+        $existingRequest = $this->findPayrollRequest($fromDate, $toDate);
+
+        if ($existingRequest && $existingRequest->status !== 'rejected' && !$request->boolean('force')) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Payroll request already exists for this selected period.',
+                'data' => [
+                    'request' => $this->transformPayrollRequest($existingRequest),
+                    'period' => $this->payrollPeriodPayload($fromDate, $toDate),
+                    'summary' => $summary,
+                    'already_exists' => true,
+                ],
+            ]);
+        }
+
+        if ($existingRequest && $existingRequest->status === 'approved') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Approved payroll request cannot be replaced.',
+                'data' => [
+                    'request' => $this->transformPayrollRequest($existingRequest),
+                    'period' => $this->payrollPeriodPayload($fromDate, $toDate),
+                ],
+            ], 422);
+        }
+
+        $businessRequest = DB::transaction(function () use (
+            $authUser,
+            $validated,
+            $fromDate,
+            $toDate,
+            $summary,
+            $payrollAmount,
+            $existingRequest
+        ) {
+            $payload = [
+                'property_id' => null,
+                'property_name' => 'ASHBHUB Payroll',
+                'requested_by' => $authUser?->id,
+                'request_type' => 'salary',
+                'title' => $this->payrollRequestTitle($fromDate, $toDate),
+                'description' => $this->buildPayrollRequestDescription($fromDate, $toDate, $summary),
+                'amount' => $payrollAmount,
+                'priority' => Str::lower((string) ($validated['priority'] ?? 'normal')),
+                'status' => 'pending',
+                'expected_date' => filled($validated['expected_date'] ?? null)
+                    ? Carbon::parse((string) $validated['expected_date'])->toDateString()
+                    : $toDate->toDateString(),
+            ];
+
+            if ($existingRequest && $existingRequest->status === 'rejected') {
+                $payload['request_code'] = $this->generateRequestCode();
+
+                return BusinessRequest::query()->create($payload);
+            }
+
+            if ($existingRequest) {
+                $existingRequest->update($payload);
+
+                return $existingRequest->refresh();
+            }
+
+            $payload['request_code'] = $this->generateRequestCode();
+
+            return BusinessRequest::query()->create($payload);
+        });
+
+        $businessRequest->load([
+            'requester:id,first_name,last_name,email',
+            'reviewer:id,first_name,last_name,email',
+            'expense:id,expense_code,amount,status,expense_date',
+        ]);
+
+        $this->notifyPayrollRequestRecipients($businessRequest);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Payroll request pushed successfully.',
+            'data' => [
+                'request' => $this->transformPayrollRequest($businessRequest),
+                'period' => $this->payrollPeriodPayload($fromDate, $toDate),
+                'summary' => $summary,
+                'already_exists' => false,
+            ],
+        ], 201);
+    }
+
+    /**
+     * Create or replace one worker's salary effective from a selected month.
      */
     public function store(Request $request): JsonResponse
     {
@@ -97,7 +284,7 @@ class SalaryController extends Controller
         $validated = $request->validate($this->salaryRules());
 
         $worker = User::with('role')->findOrFail((int) $validated['user_id']);
-        $this->ensureWorker($worker, 'user_id');
+        $this->ensureActivePayrollUser($worker, 'user_id');
 
         $effectiveFrom = Carbon::parse($validated['effective_from'] . '-01')
             ->startOfMonth()
@@ -118,10 +305,11 @@ class SalaryController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Employee salary saved successfully.',
+            'message' => 'User salary saved successfully.',
             'data' => $this->calculateForWorker(
                 worker: $worker,
-                monthStart: Carbon::parse($salary->effective_from)->startOfMonth(),
+                fromDate: Carbon::parse($salary->effective_from)->startOfMonth(),
+                toDate: Carbon::parse($salary->effective_from)->endOfMonth(),
                 includeTasks: true
             ),
         ], 201);
@@ -129,9 +317,6 @@ class SalaryController extends Controller
 
     /**
      * Show one salary record with calculated payment for a selected month.
-     *
-     * Optional query param:
-     * - month=2026-06
      */
     public function show(Request $request, Salary $salary): JsonResponse
     {
@@ -147,19 +332,25 @@ class SalaryController extends Controller
 
         $validated = $request->validate([
             'month' => ['nullable', 'date_format:Y-m'],
+            'from_date' => ['nullable', 'date'],
+            'to_date' => ['nullable', 'date', 'after_or_equal:from_date'],
+            'date_from' => ['nullable', 'date'],
+            'date_to' => ['nullable', 'date', 'after_or_equal:date_from'],
             'include_tasks' => ['nullable', 'boolean'],
         ]);
 
-        $monthStart = isset($validated['month'])
-            ? Carbon::parse($validated['month'] . '-01')->startOfMonth()
-            : Carbon::parse($salary->effective_from)->startOfMonth();
+        [$fromDate, $toDate] = $this->resolvePayrollDateRange(
+            $validated,
+            Carbon::parse($salary->effective_from)->startOfMonth()
+        );
 
         return response()->json([
             'success' => true,
-            'message' => 'Employee salary fetched successfully.',
+            'message' => 'User salary fetched successfully.',
             'data' => $this->calculateForWorker(
                 worker: $salary->worker,
-                monthStart: $monthStart,
+                fromDate: $fromDate,
+                toDate: $toDate,
                 includeTasks: $request->boolean('include_tasks', true)
             ),
         ]);
@@ -199,10 +390,11 @@ class SalaryController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Employee salary updated successfully.',
+            'message' => 'User salary updated successfully.',
             'data' => $this->calculateForWorker(
                 worker: $salary->worker,
-                monthStart: Carbon::parse($salary->effective_from)->startOfMonth(),
+                fromDate: Carbon::parse($salary->effective_from)->startOfMonth(),
+                toDate: Carbon::parse($salary->effective_from)->endOfMonth(),
                 includeTasks: true
             ),
         ]);
@@ -229,19 +421,22 @@ class SalaryController extends Controller
     }
 
     /**
-     * Calculate salary earned by comparing task quantity and target score.
+     * Calculate salary earned from completed AND rewarded tasks.
      *
-     * Salary progress is the lower value between:
-     * - quantity progress: completed tasks compared with minimum tasks
-     * - score target progress: monthly score compared with target percentage
-     *
-     * This means full salary is earned only when both requirements are met.
+     * Salary progress uses the lower value between:
+     * - rewarded task quantity progress: rewarded completed tasks / minimum tasks
+     * - reward score progress: average reward marks / target percentage
      */
     private function calculateForWorker(
         User $worker,
-        Carbon $monthStart,
+        Carbon $fromDate,
+        Carbon $toDate,
         bool $includeTasks
     ): array {
+        $fromDate = $fromDate->copy()->startOfDay();
+        $toDate = $toDate->copy()->endOfDay();
+        $monthStart = $fromDate->copy()->startOfMonth()->startOfDay();
+
         $targetScore = $this->targetScoreService->calculateForWorker(
             worker: $worker,
             month: $monthStart,
@@ -249,31 +444,59 @@ class SalaryController extends Controller
         );
 
         $salary = $this->resolveSalaryForMonth($worker, $monthStart);
+        $isFullMonthlySalaryStaff = $this->isFullMonthlySalaryStaff($worker);
 
-        $quantityProgress = $this->clampPercentage(
-            (float) data_get($targetScore, 'performance.quantity_progress_percentage', 0)
-        );
-
-        $scorePercentage = $this->clampPercentage(
-            (float) data_get($targetScore, 'performance.score_percentage', 0)
-        );
-
+        $minimumTasks = max(1, (int) data_get($targetScore, 'target.minimum_tasks', 1));
         $targetPercentage = $this->clampPercentage(
             (float) data_get($targetScore, 'target.target_percentage', 0)
         );
 
-        $scoreTargetProgress = $targetPercentage > 0
-            ? $this->clampPercentage(($scorePercentage / $targetPercentage) * 100)
-            : 100.0;
+        $completedStats = $this->completedTaskStats(
+            worker: $worker,
+            fromDate: $fromDate,
+            toDate: $toDate,
+            includeTasks: $includeTasks
+        );
 
-        $salaryProgress = min($quantityProgress, $scoreTargetProgress);
-        $targetMet = (bool) data_get($targetScore, 'performance.target_met', false);
+        $rewardStats = $this->rewardedCompletedTaskStats(
+            worker: $worker,
+            fromDate: $fromDate,
+            toDate: $toDate,
+            includeTasks: $includeTasks
+        );
 
-        if ($targetMet) {
+        $completedTasksCount = (int) $completedStats['completed_tasks_count'];
+
+        $rewardedCompletedTasks = (int) $rewardStats['rewarded_completed_tasks_count'];
+        $rewardAverageMarks = $this->clampPercentage((float) $rewardStats['reward_average_marks_percentage']);
+
+        $rewardedQuantityProgress = $this->clampPercentage(
+            ($rewardedCompletedTasks / $minimumTasks) * 100
+        );
+
+        $rewardScoreTargetProgress = $targetPercentage > 0
+            ? $this->clampPercentage(($rewardAverageMarks / $targetPercentage) * 100)
+            : ($rewardedCompletedTasks > 0 ? 100.0 : 0.0);
+
+        $salaryProgress = min($rewardedQuantityProgress, $rewardScoreTargetProgress);
+
+        if ($isFullMonthlySalaryStaff && $salary !== null) {
+            /*
+             * These staff members receive their full configured monthly salary.
+             * Their payroll is not reduced by task quantity or reward score.
+             */
             $salaryProgress = 100.0;
+            $fullSalaryEarned = true;
+        } else {
+            $fullSalaryEarned = $salary !== null
+                && $rewardedCompletedTasks >= $minimumTasks
+                && ($targetPercentage <= 0 || $rewardAverageMarks >= $targetPercentage);
+
+            if ($fullSalaryEarned) {
+                $salaryProgress = 100.0;
+            }
         }
 
-        $minimumTasks = max(1, (int) data_get($targetScore, 'target.minimum_tasks', 1));
         $baseSalary = $salary ? (float) $salary->base_salary : null;
 
         $earnedSalary = $baseSalary !== null
@@ -288,40 +511,235 @@ class SalaryController extends Controller
             ? round($baseSalary / $minimumTasks, 2)
             : null;
 
+        $performance = is_array($targetScore['performance'] ?? null)
+            ? $targetScore['performance']
+            : [];
+
+        $performance['completed_tasks_count'] = $completedTasksCount;
+        $performance['rewarded_completed_tasks_count'] = $rewardedCompletedTasks;
+        $performance['unrewarded_completed_tasks_count'] = max($completedTasksCount - $rewardedCompletedTasks, 0);
+        $performance['reward_average_marks_percentage'] = round($rewardAverageMarks, 2);
+        $performance['rewarded_quantity_progress_percentage'] = round($rewardedQuantityProgress, 2);
+        $performance['reward_score_target_progress_percentage'] = round($rewardScoreTargetProgress, 2);
+        $performance['salary_rule'] = $isFullMonthlySalaryStaff
+            ? 'fixed_monthly_salary_staff'
+            : 'completed_and_rewarded_tasks_only';
+        $performance['fixed_monthly_salary_staff'] = $isFullMonthlySalaryStaff;
+        $performance['target_met'] = $fullSalaryEarned;
+
         return [
             'worker' => $targetScore['worker'],
-            'month' => $targetScore['month'],
-            'period' => $targetScore['period'],
+            'month' => $fromDate->format('Y-m'),
+            'period' => [
+                'from' => $fromDate->toDateString(),
+                'to' => $toDate->toDateString(),
+                'label' => $fromDate->format('M d, Y') . ' - ' . $toDate->format('M d, Y'),
+            ],
             'salary' => [
                 'configured' => $salary !== null,
                 'id' => $salary?->id,
                 'base_salary' => $baseSalary !== null ? round($baseSalary, 2) : null,
                 'currency' => $salary?->currency ?: Salary::DEFAULT_CURRENCY,
-                'effective_from' => optional($salary?->effective_from)->toDateString(),
+                'effective_from' => $salary?->effective_from
+                    ? Carbon::parse($salary->effective_from)->toDateString()
+                    : null,
                 'notes' => $salary?->notes,
             ],
             'target' => $targetScore['target'],
-            'performance' => $targetScore['performance'],
+            'performance' => $performance,
             'payment' => [
-                'quantity_progress_percentage' => round($quantityProgress, 2),
-                'score_percentage' => round($scorePercentage, 2),
+                'quantity_progress_percentage' => round($rewardedQuantityProgress, 2),
+                'score_percentage' => round($rewardAverageMarks, 2),
                 'target_percentage' => round($targetPercentage, 2),
-                'score_target_progress_percentage' => round($scoreTargetProgress, 2),
+                'score_target_progress_percentage' => round($rewardScoreTargetProgress, 2),
                 'salary_progress_percentage' => round($salaryProgress, 2),
                 'salary_per_required_task' => $salaryPerRequiredTask,
                 'earned_salary' => $earnedSalary,
                 'deduction_amount' => $deductionAmount,
-                'full_salary_earned' => $salary !== null && $targetMet,
+                'full_salary_earned' => $fullSalaryEarned,
+                'is_fixed_monthly_salary_staff' => $isFullMonthlySalaryStaff,
+                'salary_type' => $isFullMonthlySalaryStaff
+                    ? 'fixed_monthly_staff'
+                    : 'task_reward_based',
                 'status' => $salary === null
                     ? 'salary_not_configured'
-                    : ($targetMet ? 'full_salary_earned' : 'partial_salary_earned'),
+                    : ($fullSalaryEarned ? 'full_salary_earned' : 'partial_salary_earned'),
+                'rule' => $isFullMonthlySalaryStaff
+                    ? 'This staff member receives full configured monthly salary. Tasks do not reduce salary.'
+                    : 'Salary is calculated from tasks that are both completed and rewarded within the selected date range.',
             ],
-            'tasks' => $targetScore['tasks'],
+            'tasks' => $includeTasks ? $completedStats['tasks'] : [],
+            'rewarded_tasks' => $includeTasks ? $rewardStats['tasks'] : [],
         ];
     }
 
     /**
-     * Find the latest salary that is effective on or before the selected month.
+     * Get completed tasks assigned to the selected worker for the selected date range.
+     */
+    private function completedTaskStats(
+        User $worker,
+        Carbon $fromDate,
+        Carbon $toDate,
+        bool $includeTasks
+    ): array {
+        if (!Schema::hasTable('tasks') || !Schema::hasTable('task_user')) {
+            return [
+                'completed_tasks_count' => 0,
+                'tasks' => [],
+            ];
+        }
+
+        $rows = DB::table('tasks')
+            ->join('task_user', 'task_user.task_id', '=', 'tasks.id')
+            ->where('task_user.user_id', $worker->id)
+            ->whereRaw('LOWER(tasks.status) = ?', ['completed'])
+            ->where(function ($dateQuery) use ($fromDate, $toDate) {
+                $dateQuery
+                    ->whereBetween('tasks.end_at', [
+                        $fromDate->toDateTimeString(),
+                        $toDate->toDateTimeString(),
+                    ])
+                    ->orWhere(function ($fallbackQuery) use ($fromDate, $toDate) {
+                        $fallbackQuery
+                            ->whereNull('tasks.end_at')
+                            ->whereBetween('tasks.updated_at', [
+                                $fromDate->toDateTimeString(),
+                                $toDate->toDateTimeString(),
+                            ]);
+                    });
+            })
+            ->select([
+                'tasks.id as task_id',
+                'tasks.title as task_title',
+                'tasks.start_at',
+                'tasks.end_at',
+                'tasks.status',
+            ])
+            ->groupBy('tasks.id', 'tasks.title', 'tasks.start_at', 'tasks.end_at', 'tasks.status')
+            ->orderBy('tasks.end_at')
+            ->get();
+
+        return [
+            'completed_tasks_count' => $rows->count(),
+            'tasks' => $includeTasks
+                ? $rows->map(fn ($row) => [
+                    'task_id' => (int) $row->task_id,
+                    'title' => $row->task_title,
+                    'start_at' => $row->start_at,
+                    'end_at' => $row->end_at,
+                    'status' => $row->status,
+                ])->values()->all()
+                : [],
+        ];
+    }
+
+    /**
+     * Get completed tasks that also have a saved reward for the selected worker.
+     */
+    private function rewardedCompletedTaskStats(
+        User $worker,
+        Carbon $fromDate,
+        Carbon $toDate,
+        bool $includeTasks
+    ): array {
+        if (!Schema::hasTable('task_rewards') || !Schema::hasTable('tasks')) {
+            return [
+                'rewarded_completed_tasks_count' => 0,
+                'reward_average_marks_percentage' => 0.0,
+                'tasks' => [],
+            ];
+        }
+
+        $query = DB::table('task_rewards')
+            ->join('tasks', 'tasks.id', '=', 'task_rewards.task_id')
+            ->where('task_rewards.recipient_user_id', $worker->id)
+            ->whereRaw('LOWER(tasks.status) = ?', ['completed'])
+            ->where(function ($dateQuery) use ($fromDate, $toDate) {
+                $dateQuery
+                    ->whereBetween('tasks.end_at', [
+                        $fromDate->toDateTimeString(),
+                        $toDate->toDateTimeString(),
+                    ])
+                    ->orWhere(function ($fallbackQuery) use ($fromDate, $toDate) {
+                        $fallbackQuery
+                            ->whereNull('tasks.end_at')
+                            ->whereBetween('tasks.updated_at', [
+                                $fromDate->toDateTimeString(),
+                                $toDate->toDateTimeString(),
+                            ]);
+                    });
+            })
+            ->select([
+                'tasks.id as task_id',
+                'tasks.title as task_title',
+                'tasks.start_at',
+                'tasks.end_at',
+                DB::raw('MAX(task_rewards.marks_percentage) as marks_percentage'),
+                DB::raw('MAX(COALESCE(task_rewards.ranking_label, task_rewards.grading, task_rewards.ranking)) as ranking_label'),
+            ])
+            ->groupBy('tasks.id', 'tasks.title', 'tasks.start_at', 'tasks.end_at')
+            ->orderBy('tasks.end_at');
+
+        $rows = $query->get();
+
+        $count = $rows->count();
+        $averageMarks = $count > 0
+            ? round((float) $rows->avg(fn ($row) => (float) ($row->marks_percentage ?? 0)), 2)
+            : 0.0;
+
+        return [
+            'rewarded_completed_tasks_count' => $count,
+            'reward_average_marks_percentage' => $averageMarks,
+            'tasks' => $includeTasks
+                ? $rows->map(fn ($row) => [
+                    'task_id' => (int) $row->task_id,
+                    'title' => $row->task_title,
+                    'start_at' => $row->start_at,
+                    'end_at' => $row->end_at,
+                    'marks_percentage' => round((float) ($row->marks_percentage ?? 0), 2),
+                    'ranking_label' => $row->ranking_label,
+                ])->values()->all()
+                : [],
+        ];
+    }
+
+    /**
+     * Resolve payroll filter range.
+     * from_date/to_date are preferred; month remains for backward compatibility.
+     */
+    private function resolvePayrollDateRange(array $validated, ?Carbon $fallbackMonth = null): array
+    {
+        $fromInput = $validated['from_date'] ?? $validated['date_from'] ?? null;
+        $toInput = $validated['to_date'] ?? $validated['date_to'] ?? null;
+
+        if (filled($fromInput) || filled($toInput)) {
+            $fromDate = filled($fromInput)
+                ? Carbon::parse((string) $fromInput)->startOfDay()
+                : Carbon::parse((string) $toInput)->startOfDay();
+
+            $toDate = filled($toInput)
+                ? Carbon::parse((string) $toInput)->endOfDay()
+                : Carbon::parse((string) $fromInput)->endOfDay();
+
+            if ($toDate->lt($fromDate)) {
+                throw ValidationException::withMessages([
+                    'to_date' => 'To date must be after or equal to From date.',
+                ]);
+            }
+
+            return [$fromDate, $toDate];
+        }
+
+        $month = $validated['month'] ?? null;
+        $monthStart = filled($month)
+            ? Carbon::parse($month . '-01')->startOfMonth()->startOfDay()
+            : ($fallbackMonth ? $fallbackMonth->copy()->startOfMonth()->startOfDay() : now()->startOfMonth()->startOfDay());
+
+        return [$monthStart, $monthStart->copy()->endOfMonth()->endOfDay()];
+    }
+
+    /**
+     * Find the latest salary effective on or before selected month.
      */
     private function resolveSalaryForMonth(User $worker, Carbon $monthStart): ?Salary
     {
@@ -331,6 +749,190 @@ class SalaryController extends Controller
             ->orderByDesc('effective_from')
             ->orderByDesc('id')
             ->first();
+    }
+
+    /**
+     * Summary for payroll page cards and PDF report.
+     */
+    private function buildPayrollSummary(Collection $calculations): array
+    {
+        return [
+            'workers_count' => $calculations->count(),
+            'salary_configured_count' => $calculations
+                ->filter(fn ($row) => (bool) data_get($row, 'salary.configured'))
+                ->count(),
+            'total_base_salary' => round((float) $calculations->sum(fn ($row) => (float) data_get($row, 'salary.base_salary', 0)), 2),
+            'total_earned_salary' => round((float) $calculations->sum(fn ($row) => (float) data_get($row, 'payment.earned_salary', 0)), 2),
+            'total_deduction_amount' => round((float) $calculations->sum(fn ($row) => (float) data_get($row, 'payment.deduction_amount', 0)), 2),
+            'completed_tasks_count' => (int) $calculations->sum(fn ($row) => (int) data_get($row, 'performance.completed_tasks_count', 0)),
+            'rewarded_completed_tasks_count' => (int) $calculations->sum(fn ($row) => (int) data_get($row, 'performance.rewarded_completed_tasks_count', 0)),
+            'full_salary_count' => $calculations
+                ->filter(fn ($row) => (bool) data_get($row, 'payment.full_salary_earned'))
+                ->count(),
+            'partial_salary_count' => $calculations
+                ->filter(fn ($row) => data_get($row, 'payment.status') === 'partial_salary_earned')
+                ->count(),
+            'salary_not_configured_count' => $calculations
+                ->filter(fn ($row) => data_get($row, 'payment.status') === 'salary_not_configured')
+                ->count(),
+            'salary_rule' => 'Most salaries are calculated from completed and rewarded tasks. Selected staff emails receive full configured monthly salary.',
+        ];
+    }
+
+    /**
+     * Find a payroll request for a selected period.
+     */
+    private function findPayrollRequest(Carbon $fromDate, Carbon $toDate): ?BusinessRequest
+    {
+        if (!Schema::hasTable('business_requests')) {
+            return null;
+        }
+
+        return BusinessRequest::query()
+            ->where('request_type', 'salary')
+            ->where('title', $this->payrollRequestTitle($fromDate, $toDate))
+            ->whereIn('status', ['pending', 'approved', 'rejected'])
+            ->latest('id')
+            ->first();
+    }
+
+    /**
+     * Transform payroll request details for the frontend.
+     */
+    private function transformPayrollRequest(?BusinessRequest $businessRequest): ?array
+    {
+        if (!$businessRequest) {
+            return null;
+        }
+
+        $businessRequest->loadMissing([
+            'requester:id,first_name,last_name,email',
+            'reviewer:id,first_name,last_name,email',
+            'expense:id,expense_code,amount,status,expense_date',
+        ]);
+
+        return [
+            'id' => $businessRequest->id,
+            'request_id' => $businessRequest->request_code,
+            'title' => $businessRequest->title,
+            'request_type' => $businessRequest->request_type,
+            'request_type_label' => 'Salary Request',
+            'amount' => round((float) ($businessRequest->amount ?? 0), 2),
+            'priority' => $businessRequest->priority,
+            'status' => $businessRequest->status,
+            'status_label' => Str::headline((string) $businessRequest->status),
+            'expected_date' => $businessRequest->expected_date
+                ? Carbon::parse($businessRequest->expected_date)->toDateString()
+                : null,
+            'requested_by' => $businessRequest->requested_by,
+            'requested_by_name' => $businessRequest->requester
+                ? trim(($businessRequest->requester->first_name ?? '') . ' ' . ($businessRequest->requester->last_name ?? ''))
+                : null,
+            'reviewed_by' => $businessRequest->reviewed_by,
+            'reviewed_by_name' => $businessRequest->reviewer
+                ? trim(($businessRequest->reviewer->first_name ?? '') . ' ' . ($businessRequest->reviewer->last_name ?? ''))
+                : null,
+            'expense_id' => $businessRequest->expense_id,
+            'expense' => $businessRequest->expense
+                ? [
+                    'id' => $businessRequest->expense->id,
+                    'expense_id' => $businessRequest->expense->expense_code,
+                    'amount' => round((float) ($businessRequest->expense->amount ?? 0), 2),
+                    'status' => Str::headline((string) $businessRequest->expense->status),
+                    'date' => $businessRequest->expense->expense_date
+                        ? Carbon::parse($businessRequest->expense->expense_date)->toDateString()
+                        : null,
+                ]
+                : null,
+            'created_at' => $businessRequest->created_at,
+            'updated_at' => $businessRequest->updated_at,
+        ];
+    }
+
+    /**
+     * Title used to identify one payroll request per selected period.
+     */
+    private function payrollRequestTitle(Carbon $fromDate, Carbon $toDate): string
+    {
+        return 'Payroll Request - '
+            . $fromDate->toDateString()
+            . ' to '
+            . $toDate->toDateString();
+    }
+
+    /**
+     * Period payload for API responses.
+     */
+    private function payrollPeriodPayload(Carbon $fromDate, Carbon $toDate): array
+    {
+        return [
+            'from' => $fromDate->toDateString(),
+            'to' => $toDate->toDateString(),
+            'label' => $fromDate->format('M d, Y') . ' - ' . $toDate->format('M d, Y'),
+        ];
+    }
+
+    /**
+     * Description saved in the salary request.
+     */
+    private function buildPayrollRequestDescription(
+        Carbon $fromDate,
+        Carbon $toDate,
+        array $summary
+    ): string {
+        return implode("\n", [
+            'Payroll period: ' . $fromDate->toDateString() . ' to ' . $toDate->toDateString(),
+            'Workers: ' . (int) ($summary['workers_count'] ?? 0),
+            'Configured salaries: ' . (int) ($summary['salary_configured_count'] ?? 0),
+            'Base salary total: ' . number_format((float) ($summary['total_base_salary'] ?? 0), 0, '.', ',') . ' RWF',
+            'Earned salary total: ' . number_format((float) ($summary['total_earned_salary'] ?? 0), 0, '.', ',') . ' RWF',
+            'Deduction total: ' . number_format((float) ($summary['total_deduction_amount'] ?? 0), 0, '.', ',') . ' RWF',
+            'Rewarded completed tasks: ' . (int) ($summary['rewarded_completed_tasks_count'] ?? 0),
+            'Generated automatically from payroll calculations.',
+        ]);
+    }
+
+    /**
+     * Notify finance/management when a payroll request is pushed.
+     */
+    private function notifyPayrollRequestRecipients(BusinessRequest $businessRequest): void
+    {
+        if (!class_exists(BusinessRequestCreatedNotification::class)) {
+            return;
+        }
+
+        try {
+            foreach (self::PAYROLL_REQUEST_NOTIFICATION_EMAILS as $email) {
+                if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                    continue;
+                }
+
+                Notification::route('mail', $email)
+                    ->notify(new BusinessRequestCreatedNotification($businessRequest));
+            }
+        } catch (Throwable $exception) {
+            Log::warning('Payroll request email notification failed.', [
+                'request_id' => $businessRequest->id,
+                'request_code' => $businessRequest->request_code,
+                'error' => $exception->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Generate request code compatible with RequestController.
+     */
+    private function generateRequestCode(): string
+    {
+        $year = now()->format('Y');
+        $nextNumber = ((int) BusinessRequest::query()->max('id')) + 1;
+
+        do {
+            $code = sprintf('R-%s-%05d', $year, $nextNumber);
+            $nextNumber++;
+        } while (BusinessRequest::query()->where('request_code', $code)->exists());
+
+        return $code;
     }
 
     /**
@@ -348,50 +950,47 @@ class SalaryController extends Controller
     }
 
     /**
-     * Resolve workers visible to the current user.
+     * Resolve active payroll users visible to current user.
+     *
+     * Payroll is not limited to Employee/Intern roles because every active
+     * system user may deserve salary. This matches the user records returned
+     * by RegisterController, where users are managed through the users table
+     * and active status controls account availability.
      */
     private function resolveWorkers(User $authUser, ?int $requestedUserId): Collection
     {
-        if ($this->isWorker($authUser)) {
-            return collect([$authUser->loadMissing('role')]);
-        }
-
         if (!$this->canManageSalaries($authUser)) {
-            abort(403, 'You are not allowed to view salary calculations.');
+            $this->ensureActivePayrollUser($authUser, 'user_id');
+
+            return collect([$authUser->loadMissing('role')]);
         }
 
         if ($requestedUserId) {
             $worker = User::with('role')->findOrFail($requestedUserId);
-            $this->ensureWorker($worker, 'user_id');
+            $this->ensureActivePayrollUser($worker, 'user_id');
 
             return collect([$worker]);
         }
 
         return User::with('role')
-            ->where(function ($query) {
-                $query
-                    ->whereIn('role_id', [4, 5])
-                    ->orWhereHas('role', function ($roleQuery) {
-                        $roleQuery
-                            ->whereIn('slug', ['employee', 'intern'])
-                            ->orWhereIn('name', ['Employee', 'Intern']);
-                    });
-            })
+            ->where('is_active', true)
+            ->orderBy('first_name')
+            ->orderBy('last_name')
             ->orderBy('id')
             ->get();
     }
 
     /**
-     * Only employees and interns can receive a salary record.
+     * Payroll should include active users only.
      */
-    private function ensureWorker(User $user, string $field): void
+    private function ensureActivePayrollUser(User $user, string $field): void
     {
-        if ($this->isWorker($user)) {
+        if ((bool) ($user->is_active ?? true)) {
             return;
         }
 
         throw ValidationException::withMessages([
-            $field => 'Only employees and interns can receive salaries.',
+            $field => 'Only active users can be included in payroll.',
         ]);
     }
 
@@ -405,7 +1004,7 @@ class SalaryController extends Controller
         }
 
         return $this->canManageSalaries($authUser)
-            || ($this->isWorker($authUser) && (int) $salary->user_id === (int) $authUser->id);
+            || (int) $salary->user_id === (int) $authUser->id;
     }
 
     /**
@@ -432,17 +1031,15 @@ class SalaryController extends Controller
         ], true) || in_array((int) $user->role_id, [1, 2], true);
     }
 
-    /**
-     * Is employee or intern.
-     */
-    private function isWorker(?User $user): bool
-    {
-        if (!$user) {
-            return false;
-        }
 
-        return in_array($this->roleSlug($user), ['employee', 'intern'], true)
-            || in_array((int) $user->role_id, [4, 5], true);
+    /**
+     * Check if user is paid full configured monthly salary instead of task-based salary.
+     */
+    private function isFullMonthlySalaryStaff(User $worker): bool
+    {
+        $email = strtolower(trim((string) $worker->email));
+
+        return in_array($email, self::FULL_MONTHLY_SALARY_EMAILS, true);
     }
 
     /**

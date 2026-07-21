@@ -10,6 +10,8 @@ use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Facades\Validator;
 use Throwable;
 
@@ -237,9 +239,16 @@ class InvoiceController extends BaseController
                 'sent_at' => now(),
             ])->save();
 
+            $freshInvoice = $invoice->fresh([
+                'property:id,title,address,location,manager_name,manager_email,property_email',
+            ]);
+
             return $this->sendResponse(
                 [
-                    'invoice' => $invoice->fresh('property'),
+                    'invoice' =>
+                        $this->transformInvoice(
+                            $freshInvoice
+                        ),
                     'recipient' => $recipient,
                     'cc' => $managerCc,
 
@@ -296,7 +305,10 @@ class InvoiceController extends BaseController
         ])->save();
 
         return $this->sendResponse(
-            $invoice->fresh('property'),
+            [
+                'invoice' =>
+                    $this->transformInvoice($invoice),
+            ],
             'Invoice marked as paid successfully.'
         );
     }

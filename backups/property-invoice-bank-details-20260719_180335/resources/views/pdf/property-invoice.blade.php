@@ -15,63 +15,12 @@
         ?: '';
 
     $currency = $invoice->currency ?: 'RWF';
-<<<<<<< HEAD
-=======
     $amountValue = (float) $invoice->amount;
->>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
 
     $metadata = is_array($invoice->metadata)
         ? $invoice->metadata
         : [];
 
-<<<<<<< HEAD
-    /*
-     * invoice.amount contains the final payable total.
-     * The VAT breakdown is stored in metadata.
-     */
-    $grossAmount = (float) $invoice->amount;
-
-    $amountValue = (float) (
-        $metadata['subtotal']
-        ?? $grossAmount
-    );
-
-    $vatRate = (float) (
-        $metadata['vat_rate']
-        ?? 0
-    );
-
-    $vat = (float) (
-        $metadata['vat_amount']
-        ?? $metadata['vat']
-        ?? 0
-    );
-
-    $balanceCarriedForward = (float) (
-        $metadata['balance_carried_forward']
-        ?? 0
-    );
-
-    $adjustments = (float) (
-        $metadata['adjustments']
-        ?? 0
-    );
-
-    $credits = (float) (
-        $metadata['credits']
-        ?? 0
-    );
-
-    $invoiceTotal = (float) (
-        $metadata['total_amount']
-        ?? max(
-            $amountValue
-            + $vat
-            + $adjustments
-            - $credits,
-            0
-        )
-=======
     $balanceCarriedForward = (float) (
         $metadata['balance_carried_forward'] ?? 0
     );
@@ -86,27 +35,11 @@
 
     $credits = (float) (
         $metadata['credits'] ?? 0
->>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
     );
 
     $payments = strtolower(
         (string) $invoice->payment_status
     ) === 'paid'
-<<<<<<< HEAD
-        ? $invoiceTotal
-        : (float) (
-            $metadata['payments']
-            ?? 0
-        );
-
-    $totalBalance = max(
-        $balanceCarriedForward
-        + $invoiceTotal
-        - $payments,
-        0
-    );
-
-=======
         ? $amountValue
         : (float) (
             $metadata['payments'] ?? 0
@@ -147,7 +80,6 @@
         $dueDateObject = null;
     }
 
->>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
     $invoiceDate = $invoiceDateObject
         ? $invoiceDateObject->format('d M Y')
         : '—';
@@ -329,13 +261,9 @@
 </head>
 
 <body>
-<<<<<<< HEAD
-
-=======
     <div class="footer">
         African Safari & Hotel Booking Hub
     </div>
->>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
 
     <table width="100%">
         <tr>
@@ -367,13 +295,9 @@
                 valign="top"
                 class="right"
             >
-<<<<<<< HEAD
-
-=======
                 <div style="font-weight:800;">
                     African Safari & Hotel Booking Hub Ltd
                 </div>
->>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
 
                 <div class="small muted">
                     Kigali, Rwanda
@@ -389,10 +313,6 @@
 
                 <div class="small muted">
                     Website: www.ashbhub.com
-                </div>
-
-                <div class="small muted">
-                    TIN: 147893300
                 </div>
 
                 <div
@@ -581,12 +501,8 @@
                 </div>
 
                 <div style="padding:9px;">
-<<<<<<< HEAD
-                    Monthly invoice for Digital Growth, Marketing, Channel Distribution, and Hotel Technology Consultancy services for {{ $propertyName }}.
-=======
                     Monthly property management invoice for
                     {{ $propertyName }}.
->>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
                 </div>
             </td>
 
@@ -617,11 +533,7 @@
                     </tr>
 
                     <tr>
-<<<<<<< HEAD
-                        <td>VAT ({{ number_format($vatRate, 0) }}%):</td>
-=======
                         <td>VAT:</td>
->>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
 
                         <td class="right">
                             {{ $currency }}
@@ -713,126 +625,31 @@
     </div>
 
     <div class="payment-box">
-        <div
-            style="font-size:12px;font-weight:800;"
-        >
-            Pay securely by Bank Card
-        </div>
-<<<<<<< HEAD
-        <div style="margin-top:6px;font-weight:800;">SWIFT/BIC code: IMRWRWRWXXX</div>
-=======
->>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
-
-        <div style="margin-top:6px;">
-            Use our secure payment page to pay using
-            Visa or Mastercard.
+        <div style="font-weight:800;">
+            Card and Mobile Money
         </div>
 
-        <table
-            role="presentation"
-            cellpadding="0"
-            cellspacing="0"
-            style="margin-top:12px;"
-        >
-            <tr>
-                <td
-                    style="background:#F9A800;padding:11px 22px;text-align:center;"
-                >
-                    <a
-                        href="{{ $paymentUrl }}"
-                        style="display:block;color:#ffffff;text-decoration:none;font-size:11px;font-weight:800;"
-                    >
-                        Pay with Bank Card
-                    </a>
-                </td>
-            </tr>
-        </table>
-
-        <div
-            style="margin-top:20px;font-size:12px;font-weight:800;"
-        >
-            Bank Transfer Details
+        <div style="margin-top:5px;">
+            Use the secure payment page to pay using
+            Visa, Mastercard, MTN Mobile Money,
+            Airtel Money, or bank transfer.
         </div>
 
-        <table
-            width="100%"
-            cellpadding="0"
-            cellspacing="0"
-            style="margin-top:8px;"
-        >
-            <tr>
-                <td
-                    width="38%"
-                    style="padding:5px 0;color:#6b7280;"
-                >
-                    Bank name
-                </td>
-
-                <td
-                    width="62%"
-                    style="padding:5px 0;font-weight:800;"
-                >
-<<<<<<< HEAD
-                    I&amp;M BANK Rwanda
-=======
-                    I&amp;M BANK
->>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
-                </td>
-            </tr>
-
-            <tr>
-                <td
-                    style="padding:5px 0;color:#6b7280;"
-                >
-                    Account name
-                </td>
-
-                <td
-                    style="padding:5px 0;font-weight:800;"
-                >
-<<<<<<< HEAD
-                    
-=======
-                    African Safari and Hotel Booking Hub Ltd
->>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
-                </td>
-            </tr>
-
-            <tr>
-                <td
-                    style="padding:5px 0;color:#6b7280;"
-                >
-                    Account number
-                </td>
-
-                <td
-                    style="padding:5px 0;font-weight:800;"
-                >
-                    20149677001
-                </td>
-            </tr>
-
-            <tr>
-                <td
-                    style="padding:5px 0;color:#6b7280;"
-                >
-                    TIN
-                </td>
-
-                <td
-                    style="padding:5px 0;font-weight:800;"
-                >
-                    147893300
-                </td>
-            </tr>
-        </table>
+        <div style="margin-top:5px;">
+            <a href="{{ $paymentUrl }}">
+                {{ $paymentUrl }}
+            </a>
+        </div>
 
         <div
-            style="margin-top:12px;padding-top:10px;border-top:1px solid #d1d5db;font-size:9px;color:#6b7280;"
+            style="margin-top:13px;font-weight:800;"
         >
-            Please use the property name or invoice
-            reference as the bank transfer payment
-            reference.
+            Other ways to pay
+        </div>
+
+        <div style="margin-top:5px;">
+            Contact the ASHBHUB billing team for
+            alternative payment arrangements.
         </div>
     </div>
 
@@ -864,13 +681,9 @@
                 valign="top"
                 class="right"
             >
-<<<<<<< HEAD
-
-=======
                 <div style="font-weight:800;">
                     African Safari & Hotel Booking Hub Ltd
                 </div>
->>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
 
                 <div class="small muted">
                     Kigali, Rwanda
@@ -976,25 +789,11 @@
             by the due date shown on page 1.
         </p>
 
-<<<<<<< HEAD
-        
-        <p style="margin:10px 0 0;">
-            Contact the
-            <a
-                href="https://www.ashbhub.com/contact"
-                style="color:#ea580c;text-decoration:underline;font-weight:700;"
-            >African Safari &amp; Hotel Booking Hub billing team</a>
-            when you need clarification, a payment arrangement,
-            or payment confirmation.
-        </p>
-
-=======
         <p style="margin:10px 0 0;">
             Contact the ASHBHUB billing team when
             you need clarification, a payment
             arrangement, or payment confirmation.
         </p>
->>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
     </div>
 </body>
 </html>

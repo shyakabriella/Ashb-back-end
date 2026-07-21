@@ -3,7 +3,10 @@
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\API\BaseController as BaseController;
+use App\Models\Expense;
+use App\Models\MonthlyFinancialSnapshot;
 use App\Models\Property;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -48,6 +51,7 @@ class PropertyController extends BaseController
                 'manager_name',
                 'manager_email',
                 'property_email',
+                'contract_signed_date',
                 'units',
                 'occupancy',
                 'status',
@@ -170,6 +174,36 @@ class PropertyController extends BaseController
     }
 
     /**
+     * Monthly finance summary.
+     *
+     * Example:
+     * GET /api/properties/monthly-finance?month=2026-01
+     *
+     * This allows frontend to check current month and previous months.
+     */
+    public function monthlyFinance(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'from_date' => ['nullable', 'date'],
+            'to_date' => ['nullable', 'date', 'after_or_equal:from_date'],
+            'date_from' => ['nullable', 'date'],
+            'date_to' => ['nullable', 'date', 'after_or_equal:date_from'],
+            'month' => ['nullable', 'date_format:Y-m'],
+        ]);
+
+        if ($validator->fails()) {
+            return $this->sendError('Validation Error.', $validator->errors(), 422);
+        }
+
+        [$fromDate, $toDate] = $this->resolveFinanceDateRange($validator->validated());
+
+        return $this->sendResponse(
+            $this->calculateFinanceByDateRange($fromDate, $toDate),
+            'Finance summary retrieved successfully.'
+        );
+    }
+
+    /**
      * Store a newly created property.
      */
     public function store(Request $request)
@@ -183,6 +217,7 @@ class PropertyController extends BaseController
             'manager_name' => 'nullable|string|max:255',
             'manager_email' => 'nullable|email|max:255',
             'property_email' => 'nullable|email|max:255',
+            'contract_signed_date' => 'nullable|date_format:Y-m-d',
             'units' => 'required|integer|min:0',
             'occupancy' => 'nullable|integer|min:0|max:100',
             'status' => 'nullable|string|in:available,fully_booked,inactive',
@@ -229,6 +264,7 @@ class PropertyController extends BaseController
             'manager_name' => $this->nullableString($data['manager_name'] ?? null),
             'manager_email' => $this->nullableString($data['manager_email'] ?? null),
             'property_email' => $this->nullableString($data['property_email'] ?? null),
+            'contract_signed_date' => $data['contract_signed_date'] ?? null,
             'units' => (int) $data['units'],
             'occupancy' => $occupancy,
             'status' => $status,
@@ -284,6 +320,7 @@ class PropertyController extends BaseController
             'manager_name' => 'sometimes|nullable|string|max:255',
             'manager_email' => 'sometimes|nullable|email|max:255',
             'property_email' => 'sometimes|nullable|email|max:255',
+            'contract_signed_date' => 'sometimes|nullable|date_format:Y-m-d',
             'units' => 'sometimes|required|integer|min:0',
             'occupancy' => 'sometimes|nullable|integer|min:0|max:100',
             'status' => 'sometimes|nullable|string|in:available,fully_booked,inactive',
@@ -478,6 +515,93 @@ class PropertyController extends BaseController
         return $this->sendResponse([], 'Property deleted successfully.');
     }
 
+    private function resolveFinanceDateRange(array $validated): array
+    {
+        if (filled($validated['month'] ?? null)) {
+            $startDate = Carbon::createFromFormat('Y-m', (string) $validated['month'])
+                ->startOfMonth();
+            $endDate = Carbon::createFromFormat('Y-m', (string) $validated['month'])
+                ->endOfMonth();
+
+            return [$startDate, $endDate];
+        }
+
+        $rawFromDate = $validated['from_date']
+            ?? $validated['date_from']
+            ?? null;
+
+        $rawToDate = $validated['to_date']
+            ?? $validated['date_to']
+            ?? null;
+
+        $startDate = filled($rawFromDate)
+            ? Carbon::parse((string) $rawFromDate)->startOfDay()
+            : now()->startOfMonth();
+
+        $endDate = filled($rawToDate)
+            ? Carbon::parse((string) $rawToDate)->endOfDay()
+            : now()->endOfDay();
+
+        if ($endDate->lt($startDate)) {
+            $endDate = $startDate->copy()->endOfDay();
+        }
+
+        return [$startDate, $endDate];
+    }
+
+    private function calculateFinanceByDateRange(Carbon $fromDate, Carbon $toDate): array
+    {
+        $propertiesQuery = Property::query()
+            ->whereNotNull('price')
+            ->where(function ($query) {
+                $query
+                    ->whereNull('status')
+                    ->orWhere('status', '!=', 'inactive');
+            });
+
+        $propertiesCount = (clone $propertiesQuery)->count();
+        $monthlyPropertyPrice = (float) (clone $propertiesQuery)->sum('price');
+
+        $monthCount = $fromDate
+            ->copy()
+            ->startOfMonth()
+            ->diffInMonths($toDate->copy()->startOfMonth()) + 1;
+
+        $totalAvailableBalance = $monthlyPropertyPrice * $monthCount;
+
+        $expensesQuery = Expense::query()
+            ->whereDate('expense_date', '>=', $fromDate->toDateString())
+            ->whereDate('expense_date', '<=', $toDate->toDateString());
+
+        $expensesCount = (clone $expensesQuery)->count();
+        $paidExpensesCount = (clone $expensesQuery)->where('status', 'paid')->count();
+        $pendingExpensesCount = (clone $expensesQuery)->where('status', 'pending')->count();
+        $overdueExpensesCount = (clone $expensesQuery)->where('status', 'overdue')->count();
+
+        $consumedAmount = (float) (clone $expensesQuery)->sum('amount');
+        $balance = $totalAvailableBalance - $consumedAmount;
+
+        return [
+            'from_date' => $fromDate->toDateString(),
+            'to_date' => $toDate->toDateString(),
+            'date_from' => $fromDate->toDateString(),
+            'date_to' => $toDate->toDateString(),
+            'period_label' => $fromDate->format('M d, Y') . ' - ' . $toDate->format('M d, Y'),
+            'month_label' => $fromDate->format('M d, Y') . ' - ' . $toDate->format('M d, Y'),
+            'month_count' => $monthCount,
+            'properties_count' => $propertiesCount,
+            'monthly_property_price' => round($monthlyPropertyPrice, 2),
+            'total_property_price' => round($totalAvailableBalance, 2),
+            'total_available_balance' => round($totalAvailableBalance, 2),
+            'consumed_amount' => round($consumedAmount, 2),
+            'balance' => round($balance, 2),
+            'expenses_count' => $expensesCount,
+            'paid_expenses_count' => $paidExpensesCount,
+            'pending_expenses_count' => $pendingExpensesCount,
+            'overdue_expenses_count' => $overdueExpensesCount,
+        ];
+    }
+
     /**
      * Convert the model to a frontend-friendly structure.
      */
@@ -516,6 +640,9 @@ class PropertyController extends BaseController
             'manager_name' => $property->manager_name,
             'manager_email' => $managerEmail,
             'property_email' => $propertyEmail,
+            'contract_signed_date' => $property->contract_signed_date
+                ? Carbon::parse($property->contract_signed_date)->toDateString()
+                : null,
             'client_name' => $property->manager_name ?: 'Property Account',
             'client_email' => $propertyEmail ?: $managerEmail,
             'email' => $propertyEmail ?: $managerEmail,

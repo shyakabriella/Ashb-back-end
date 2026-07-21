@@ -633,6 +633,7 @@ class RequestController extends Controller
     private function expenseCategoryFromRequestType(string $requestType): string
     {
         return match (Str::lower($requestType)) {
+            'salary' => 'salary',
             'maintenance' => 'maintenance',
             'marketing' => 'marketing',
             'utilities' => 'utilities',

@@ -1,4 +1,5 @@
 @php
+<<<<<<< HEAD
     $propertyName = $invoice->property_name ?: optional($property)->title ?: 'Property';
     $managerName = $invoice->manager_name ?: optional($property)->manager_name ?: 'Property Manager';
     $address = optional($property)->address ?: '';
@@ -38,33 +39,153 @@
     $dueDate = optional($invoice->due_date)->format('M d, Y') ?: '—';
     $isReminder = $mode === 'reminder';
     $daysBeforeDue = (int) ($daysBeforeDue ?? 0);
+=======
+    $propertyName = $invoice->property_name
+        ?: optional($property)->title
+        ?: 'Property';
 
-    $logoUrl = rtrim(config('app.url'), '/') . '/ashbhub-logo.png';
+    $managerName = $invoice->manager_name
+        ?: optional($property)->manager_name
+        ?: 'Property Manager';
 
-    $title = $isReminder ? 'Payment Reminder' : 'Invoice Notice';
+    $currency = $invoice->currency ?: 'RWF';
+>>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
 
-    if ($isReminder && $daysBeforeDue === 0) {
-        $reminderLine = 'Payment is due today.';
-    } elseif ($isReminder && $daysBeforeDue === 1) {
-        $reminderLine = 'Payment is due tomorrow.';
-    } elseif ($isReminder) {
-        $reminderLine = 'Payment is due in ' . $daysBeforeDue . ' days.';
-    } else {
-        $reminderLine = 'Please review the invoice details below.';
+    $amount = number_format(
+        (float) $invoice->amount,
+        0
+    );
+
+    try {
+        $invoiceDateObject = $invoice->invoice_date
+            ? \Carbon\Carbon::parse(
+                $invoice->invoice_date
+            )
+            : null;
+    } catch (\Throwable $exception) {
+        $invoiceDateObject = null;
     }
+
+    try {
+        $dueDateObject = $invoice->due_date
+            ? \Carbon\Carbon::parse(
+                $invoice->due_date
+            )
+            : null;
+    } catch (\Throwable $exception) {
+        $dueDateObject = null;
+    }
+
+    $invoiceDate = $invoiceDateObject
+        ? $invoiceDateObject->format('d M Y')
+        : '—';
+
+    $dueDate = $dueDateObject
+        ? $dueDateObject->format('d M Y')
+        : '—';
+
+    $paymentStatus = strtolower(
+        (string) (
+            $invoice->payment_status
+            ?: 'unpaid'
+        )
+    );
+
+    $isPaid = in_array(
+        $paymentStatus,
+        [
+            'paid',
+            'completed',
+            'success',
+            'successful',
+        ],
+        true
+    );
+
+    $isOverdue = !$isPaid
+        && $dueDateObject
+        && $dueDateObject->isPast();
+
+    $statusLabel = strtoupper(
+        str_replace(
+            '_',
+            ' ',
+            $paymentStatus
+        )
+    );
+
+    $statusColor = $isPaid
+        ? '#047857'
+        : (
+            $isOverdue
+                ? '#dc2626'
+                : '#d97706'
+        );
+
+    $frontendUrl = rtrim(
+        (string) env(
+            'APP_FRONTEND_URL',
+            'https://www.d.ashbhub.com'
+        ),
+        '/'
+    );
+
+    $paymentUrl = $paymentUrl
+        ?? $invoice->getAttribute('payment_url')
+        ?? $invoice->getAttribute('checkout_url')
+        ?? $frontendUrl
+            . '/invoices/'
+            . $invoice->id
+            . '/pay';
+
+    $logoUrl = (string) env(
+        'INVOICE_LOGO_URL',
+        rtrim(
+            (string) config('app.url'),
+            '/'
+        ) . '/ashbhub-logo.png'
+    );
+
+    $summaryTitle = $isOverdue
+        ? 'Summary of your outstanding invoice'
+        : 'Summary of your invoice';
+
+    $messageText = $isOverdue
+        ? 'We hope you are doing well. According to our records, the invoice below remains outstanding. We kindly request that you review the details and arrange payment at your earliest convenience. If payment has already been completed, please disregard this reminder and send us the payment confirmation.'
+        : 'Please find below the details of your property management invoice. We kindly ask you to review the information and arrange payment by the due date. A complete PDF copy of the invoice is attached to this email for your records.';
 @endphp
 
 <!doctype html>
-<html>
+<html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>{{ $invoice->invoice_number }}</title>
+
+    <title>
+        {{ $summaryTitle }}
+    </title>
 </head>
 
-<body style="margin:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;color:#111827;">
-    <div style="max-width:760px;margin:0 auto;padding:34px 18px;">
-        <div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:18px;overflow:hidden;box-shadow:0 8px 28px rgba(15,23,42,0.06);">
+<body
+    style="margin:0;background:#f5f6f8;font-family:Arial,Helvetica,sans-serif;color:#111827;"
+>
+    <div
+        style="max-width:680px;margin:0 auto;padding:28px 16px 38px;"
+    >
+        <div
+            style="background:#ffffff;border:1px solid #e5e7eb;"
+        >
+            <!-- Logo -->
+            <div
+                style="padding:34px 34px 18px;text-align:center;"
+            >
+                <img
+                    src="{{ $logoUrl }}"
+                    alt="African Safari and Hotel Booking Hub"
+                    width="125"
+                    style="display:block;width:125px;max-width:125px;height:auto;margin:0 auto;border:0;"
+                >
 
+<<<<<<< HEAD
             <div style="padding:28px 32px;border-bottom:1px solid #e5e7eb;background:#ffffff;">
                 <table width="100%" cellpadding="0" cellspacing="0">
                     <tr>
@@ -101,119 +222,157 @@
                         </td>
                     </tr>
                 </table>
+=======
+                <div
+                    style="margin-top:14px;font-size:12px;font-weight:800;letter-spacing:1.3px;text-transform:uppercase;color:#F9A800;"
+                >
+                    African Safari &amp; Hotel Booking Hub
+                </div>
+>>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
             </div>
 
-            <div style="padding:34px 32px;">
-                <h1 style="margin:0;font-size:28px;line-height:1.25;color:#111827;">
-                    {{ $title }}
-                </h1>
-
-                <p style="margin:16px 0 0;font-size:15px;line-height:1.8;color:#374151;">
+            <div
+                style="padding:20px 38px 38px;"
+            >
+                <p
+                    style="margin:0;font-size:15px;line-height:1.75;color:#111827;"
+                >
                     Dear {{ $managerName }},
                 </p>
 
-                @if ($isReminder)
-                    <p style="margin:14px 0 0;font-size:15px;line-height:1.8;color:#374151;">
-                        We hope you are doing well. This is a polite reminder regarding the upcoming payment for
-                        <strong>{{ $propertyName }}</strong>.
-                    </p>
+                <p
+                    style="margin:16px 0 0;font-size:15px;line-height:1.75;color:#374151;"
+                >
+                    Thank you for your continued partnership
+                    with African Safari &amp; Hotel Booking Hub.
+                </p>
 
-                    <p style="margin:12px 0 0;font-size:15px;line-height:1.8;color:#374151;">
-                        Kindly arrange payment on or before <strong>{{ $dueDate }}</strong> to keep your account up to date.
-                    </p>
-                @else
-                    <p style="margin:14px 0 0;font-size:15px;line-height:1.8;color:#374151;">
-                        Please find below the invoice details for <strong>{{ $propertyName }}</strong>.
-                        Kindly review and arrange payment by the due date.
-                    </p>
-                @endif
+                <p
+                    style="margin:12px 0 0;font-size:15px;line-height:1.75;color:#374151;"
+                >
+                    {{ $messageText }}
+                </p>
 
-                <div style="margin-top:26px;background:#fff7ed;border:1px solid #fed7aa;border-radius:14px;padding:18px 20px;">
-                    <div style="font-size:12px;font-weight:900;color:#9a3412;text-transform:uppercase;letter-spacing:.9px;">
-                        {{ $isReminder ? 'Payment Reminder' : 'Invoice Summary' }}
-                    </div>
+                <!-- Invoice summary -->
+                <h1
+                    style="margin:32px 0 0;font-size:26px;line-height:1.25;color:#111827;"
+                >
+                    {{ $summaryTitle }}
+                </h1>
 
-                    <div style="font-size:16px;font-weight:900;color:#111827;margin-top:8px;">
-                        {{ $reminderLine }}
-                    </div>
-                </div>
-
-                <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:30px;">
+                <table
+                    role="presentation"
+                    width="100%"
+                    cellpadding="0"
+                    cellspacing="0"
+                    style="margin-top:24px;border-collapse:collapse;"
+                >
                     <tr>
-                        <td style="vertical-align:top;width:55%;padding-right:18px;">
-                            <div style="font-size:12px;text-transform:uppercase;font-weight:900;color:#6b7280;letter-spacing:1px;">
-                                Billed Property
-                            </div>
-
-                            <div style="font-size:20px;font-weight:900;color:#111827;margin-top:9px;line-height:1.4;">
-                                {{ $propertyName }}
-                            </div>
-
-                            @if ($address || $location)
-                                <div style="font-size:14px;color:#4b5563;margin-top:8px;line-height:1.7;">
-                                    {{ $address }}{{ $location ? ', ' . $location : '' }}
-                                </div>
-                            @endif
+                        <td
+                            style="padding:11px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#4b5563;"
+                        >
+                            Property name
                         </td>
 
-                        <td style="vertical-align:top;width:45%;padding-left:18px;">
-                            <table width="100%" cellpadding="0" cellspacing="0">
-                                <tr>
-                                    <td style="font-size:13px;color:#6b7280;padding-bottom:10px;">
-                                        Invoice Date
-                                    </td>
+                        <td
+                            align="right"
+                            style="padding:11px 0;border-bottom:1px solid #eeeeee;font-size:14px;font-weight:800;color:#111827;"
+                        >
+                            {{ $propertyName }}
+                        </td>
+                    </tr>
 
-                                    <td style="font-size:13px;font-weight:800;color:#111827;text-align:right;padding-bottom:10px;">
-                                        {{ $invoiceDate }}
-                                    </td>
-                                </tr>
+                    <tr>
+                        <td
+                            style="padding:11px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#4b5563;"
+                        >
+                            Invoice date
+                        </td>
 
-                                <tr>
-                                    <td style="font-size:13px;color:#6b7280;padding-bottom:10px;">
-                                        Due Date
-                                    </td>
+                        <td
+                            align="right"
+                            style="padding:11px 0;border-bottom:1px solid #eeeeee;font-size:14px;font-weight:800;color:#111827;"
+                        >
+                            {{ $invoiceDate }}
+                        </td>
+                    </tr>
 
-                                    <td style="font-size:13px;font-weight:900;color:#ea580c;text-align:right;padding-bottom:10px;">
-                                        {{ $dueDate }}
-                                    </td>
-                                </tr>
+                    <tr>
+                        <td
+                            style="padding:11px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#4b5563;"
+                        >
+                            Invoice balance
+                        </td>
 
-                                <tr>
-                                    <td style="font-size:13px;color:#6b7280;">
-                                        Status
-                                    </td>
+                        <td
+                            align="right"
+                            style="padding:11px 0;border-bottom:1px solid #eeeeee;font-size:15px;font-weight:900;color:#F05A37;"
+                        >
+                            {{ $currency }} {{ $amount }}
+                        </td>
+                    </tr>
 
-                                    <td style="font-size:13px;font-weight:900;color:#b45309;text-align:right;">
-                                        {{ strtoupper(str_replace('_', ' ', $invoice->payment_status)) }}
-                                    </td>
-                                </tr>
-                            </table>
+                    <tr>
+                        <td
+                            style="padding:11px 0;border-bottom:1px solid #eeeeee;font-size:14px;color:#4b5563;"
+                        >
+                            Payment due date
+                        </td>
+
+                        <td
+                            align="right"
+                            style="padding:11px 0;border-bottom:1px solid #eeeeee;font-size:14px;font-weight:900;color:#F05A37;"
+                        >
+                            {{ $dueDate }}
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td
+                            style="padding:11px 0;font-size:14px;color:#4b5563;"
+                        >
+                            Payment status
+                        </td>
+
+                        <td
+                            align="right"
+                            style="padding:11px 0;font-size:14px;font-weight:900;color:{{ $statusColor }};"
+                        >
+                            {{ $statusLabel }}
                         </td>
                     </tr>
                 </table>
 
-                <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:32px;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;">
-                    <thead>
-                        <tr style="background:#f9fafb;">
-                            <th align="left" style="padding:15px 16px;font-size:12px;text-transform:uppercase;color:#6b7280;letter-spacing:1px;border-bottom:1px solid #e5e7eb;">
-                                Description
-                            </th>
+                <!-- PDF attachment notice -->
+                <div
+                    style="margin-top:25px;padding:14px 16px;background:#f8fafc;border-left:4px solid #F9A800;font-size:13px;line-height:1.65;color:#475569;"
+                >
+                    A PDF copy of this invoice is attached
+                    at the bottom of this email. You may
+                    open, download, print, or save it to
+                    Google Drive.
+                </div>
 
-                            <th align="right" style="padding:15px 16px;font-size:12px;text-transform:uppercase;color:#6b7280;letter-spacing:1px;border-bottom:1px solid #e5e7eb;">
-                                Amount
-                            </th>
-                        </tr>
-                    </thead>
+                <!-- How to pay -->
+                <h2
+                    style="margin:34px 0 0;font-size:24px;line-height:1.3;color:#111827;"
+                >
+                    How to pay
+                </h2>
 
-                    <tbody>
-                        <tr>
-                            <td style="padding:18px 16px;font-size:14px;color:#111827;border-bottom:1px solid #e5e7eb;">
-                                <strong>{{ $propertyName }}</strong><br>
-                                <span style="font-size:13px;color:#6b7280;">
-                                    Monthly property management billing
-                                </span>
-                            </td>
+                <!-- Bank transfer -->
+                <div
+                    style="margin-top:22px;font-size:15px;font-weight:800;color:#111827;"
+                >
+                    1. Bank transfer
+                    <span
+                        style="font-weight:400;color:#d97706;"
+                    >
+                        — recommended
+                    </span>
+                </div>
 
+<<<<<<< HEAD
                             <td align="right" style="padding:18px 16px;font-size:14px;font-weight:900;color:#111827;border-bottom:1px solid #e5e7eb;">
                                 {{ $currency }} {{ $subtotal }}
                             </td>
@@ -267,22 +426,199 @@
 
                 <p style="margin:26px 0 0;font-size:14px;line-height:1.8;color:#4b5563;">
                     Please contact our billing team if this payment has already been completed or if you need assistance regarding this invoice.
+=======
+                <p
+                    style="margin:10px 0 0;font-size:14px;line-height:1.75;color:#374151;"
+                >
+                    Transfer the full invoice amount
+                    using the bank account details below.
                 </p>
 
-                <p style="margin:18px 0 0;font-size:14px;line-height:1.8;color:#4b5563;">
-                    Thank you for your continued cooperation.
+                <table
+                    role="presentation"
+                    width="100%"
+                    cellpadding="0"
+                    cellspacing="0"
+                    style="margin-top:14px;border-collapse:collapse;background:#fffaf2;border:1px solid #fed7aa;"
+                >
+                    <tr>
+                        <td
+                            width="38%"
+                            style="padding:10px 14px;border-bottom:1px solid #fed7aa;font-size:13px;color:#6b7280;"
+                        >
+                            Bank name
+                        </td>
+
+                        <td
+                            width="62%"
+                            style="padding:10px 14px;border-bottom:1px solid #fed7aa;font-size:13px;font-weight:800;color:#111827;"
+                        >
+                            I&amp;M BANK
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td
+                            style="padding:10px 14px;border-bottom:1px solid #fed7aa;font-size:13px;color:#6b7280;"
+                        >
+                            Account name
+                        </td>
+
+                        <td
+                            style="padding:10px 14px;border-bottom:1px solid #fed7aa;font-size:13px;font-weight:800;color:#111827;"
+                        >
+                            African Safari and Hotel Booking Hub Ltd
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td
+                            style="padding:10px 14px;border-bottom:1px solid #fed7aa;font-size:13px;color:#6b7280;"
+                        >
+                            Account number
+                        </td>
+
+                        <td
+                            style="padding:10px 14px;border-bottom:1px solid #fed7aa;font-size:14px;font-weight:900;color:#111827;"
+                        >
+                            20149677001
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td
+                            style="padding:10px 14px;font-size:13px;color:#6b7280;"
+                        >
+                            TIN
+                        </td>
+
+                        <td
+                            style="padding:10px 14px;font-size:13px;font-weight:800;color:#111827;"
+                        >
+                            147893300
+                        </td>
+                    </tr>
+                </table>
+
+                <p
+                    style="margin:12px 0 0;font-size:13px;line-height:1.7;color:#6b7280;"
+                >
+                    Please use the property name as the
+                    transfer reference so our billing team
+                    can identify your payment quickly.
+>>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
                 </p>
 
-                <p style="margin:26px 0 0;font-size:14px;line-height:1.8;color:#111827;">
+                <!-- Bank card -->
+                @if (!$isPaid)
+                    <div
+                        style="margin-top:28px;font-size:15px;font-weight:800;color:#111827;"
+                    >
+                        2. Instant bank card payment
+                    </div>
+
+                    <p
+                        style="margin:10px 0 0;font-size:14px;line-height:1.75;color:#374151;"
+                    >
+                        You may settle the invoice immediately
+                        using a Visa or Mastercard through our
+                        secure payment page.
+                    </p>
+
+                    <table
+                        role="presentation"
+                        width="100%"
+                        cellpadding="0"
+                        cellspacing="0"
+                        style="margin-top:17px;"
+                    >
+                        <tr>
+                            <td align="center">
+                                <a
+                                    href="{{ $paymentUrl }}"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style="display:inline-block;background:#F9A800;color:#ffffff;text-decoration:none;font-size:15px;font-weight:900;padding:15px 30px;border-radius:28px;"
+                                >
+                                    Pay with Bank Card
+                                </a>
+                            </td>
+                        </tr>
+                    </table>
+                @else
+                    <div
+                        style="margin-top:28px;padding:14px 18px;background:#ecfdf5;border:1px solid #a7f3d0;text-align:center;font-size:14px;font-weight:900;color:#047857;"
+                    >
+                        Payment completed
+                    </div>
+                @endif
+
+                <!-- Confirmation -->
+                <div
+                    style="margin-top:30px;font-size:15px;font-weight:800;color:#111827;"
+                >
+                    3. Confirm your payment
+                </div>
+
+                <p
+                    style="margin:10px 0 0;font-size:14px;line-height:1.75;color:#374151;"
+                >
+                    After making a bank transfer, please
+                    send the payment receipt or transaction
+                    confirmation to
+                    <a
+                        href="mailto:hotelandsafari@gmail.com"
+                        style="color:#ea580c;font-weight:800;"
+                    >
+                        hotelandsafari@gmail.com
+                    </a>.
+                    This helps us update your invoice status
+                    without delay.
+                </p>
+
+                <!-- Help -->
+                <p
+                    style="margin:30px 0 0;font-size:14px;line-height:1.75;color:#374151;"
+                >
+                    For any questions concerning this
+                    invoice or payment process, contact
+                    our billing team by email or call
+                    <a
+                        href="tel:+250788471880"
+                        style="color:#ea580c;font-weight:800;"
+                    >
+                        +250 788 471 880
+                    </a>.
+                </p>
+
+                <p
+                    style="margin:28px 0 0;font-size:14px;line-height:1.75;color:#111827;"
+                >
                     Kind regards,<br>
+<<<<<<< HEAD
                     <strong>Billing Team</strong>
+=======
+                    <strong>
+                        Billing &amp; Collections Team
+                    </strong><br>
+                    African Safari &amp; Hotel Booking Hub
+>>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
                 </p>
             </div>
         </div>
 
+<<<<<<< HEAD
         <p style="text-align:center;font-size:12px;color:#9ca3af;margin-top:18px;line-height:1.6;">
             This is an automated billing email.
         </p>
+=======
+        <div
+            style="padding:20px 10px 0;text-align:center;font-size:12px;line-height:1.65;color:#9ca3af;"
+        >
+            African Safari &amp; Hotel Booking Hub Ltd<br>
+            TIN: 147893300 · Kigali, Rwanda
+        </div>
+>>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
     </div>
 </body>
 </html>
