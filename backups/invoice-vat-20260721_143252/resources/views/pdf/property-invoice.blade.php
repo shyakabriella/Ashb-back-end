@@ -15,74 +15,70 @@
         ?: '';
 
     $currency = $invoice->currency ?: 'RWF';
+    $amountValue = (float) $invoice->amount;
 
     $metadata = is_array($invoice->metadata)
         ? $invoice->metadata
         : [];
 
-    /*
-     * invoice.amount contains the final payable total.
-     * The VAT breakdown is stored in metadata.
-     */
-    $grossAmount = (float) $invoice->amount;
-
-    $amountValue = (float) (
-        $metadata['subtotal']
-        ?? $grossAmount
-    );
-
-    $vatRate = (float) (
-        $metadata['vat_rate']
-        ?? 0
+    $balanceCarriedForward = (float) (
+        $metadata['balance_carried_forward'] ?? 0
     );
 
     $vat = (float) (
-        $metadata['vat_amount']
-        ?? $metadata['vat']
-        ?? 0
-    );
-
-    $balanceCarriedForward = (float) (
-        $metadata['balance_carried_forward']
-        ?? 0
+        $metadata['vat'] ?? 0
     );
 
     $adjustments = (float) (
-        $metadata['adjustments']
-        ?? 0
+        $metadata['adjustments'] ?? 0
     );
 
     $credits = (float) (
-        $metadata['credits']
-        ?? 0
-    );
-
-    $invoiceTotal = (float) (
-        $metadata['total_amount']
-        ?? max(
-            $amountValue
-            + $vat
-            + $adjustments
-            - $credits,
-            0
-        )
+        $metadata['credits'] ?? 0
     );
 
     $payments = strtolower(
         (string) $invoice->payment_status
     ) === 'paid'
-        ? $invoiceTotal
+        ? $amountValue
         : (float) (
-            $metadata['payments']
-            ?? 0
+            $metadata['payments'] ?? 0
         );
+
+    $invoiceTotal = max(
+        $amountValue
+            + $vat
+            + $adjustments
+            - $credits,
+        0
+    );
 
     $totalBalance = max(
         $balanceCarriedForward
-        + $invoiceTotal
-        - $payments,
+            + $invoiceTotal
+            - $payments,
         0
     );
+
+    try {
+        $invoiceDateObject = $invoice->invoice_date
+            ? \Carbon\Carbon::parse(
+                $invoice->invoice_date
+            )
+            : null;
+    } catch (\Throwable $exception) {
+        $invoiceDateObject = null;
+    }
+
+    try {
+        $dueDateObject = $invoice->due_date
+            ? \Carbon\Carbon::parse(
+                $invoice->due_date
+            )
+            : null;
+    } catch (\Throwable $exception) {
+        $dueDateObject = null;
+    }
 
     $invoiceDate = $invoiceDateObject
         ? $invoiceDateObject->format('d M Y')
@@ -505,7 +501,8 @@
                 </div>
 
                 <div style="padding:9px;">
-                    Monthly invoice for Digital Growth, Marketing, Channel Distribution, and Hotel Technology Consultancy services for {{ $propertyName }}.
+                    Monthly property management invoice for
+                    {{ $propertyName }}.
                 </div>
             </td>
 
@@ -536,7 +533,7 @@
                     </tr>
 
                     <tr>
-                        <td>VAT ({{ number_format($vatRate, 0) }}%):</td>
+                        <td>VAT:</td>
 
                         <td class="right">
                             {{ $currency }}
@@ -684,7 +681,7 @@
                     width="62%"
                     style="padding:5px 0;font-weight:800;"
                 >
-                    I&amp;M BANK Rwanda
+                    I&amp;M BANK
                 </td>
             </tr>
 
@@ -874,17 +871,11 @@
             by the due date shown on page 1.
         </p>
 
-        
         <p style="margin:10px 0 0;">
-            Contact the
-            <a
-                href="https://www.ashbhub.com/contact"
-                style="color:#ea580c;text-decoration:underline;font-weight:700;"
-            >African Safari &amp; Hotel Booking Hub billing team</a>
-            when you need clarification, a payment arrangement,
-            or payment confirmation.
+            Contact the ASHBHUB billing team when
+            you need clarification, a payment
+            arrangement, or payment confirmation.
         </p>
-
     </div>
 </body>
 </html>

@@ -3,37 +3,8 @@
     $managerName = $invoice->manager_name ?: optional($property)->manager_name ?: 'Property Manager';
     $address = optional($property)->address ?: '';
     $location = optional($property)->location ?: '';
-    $metadata = is_array($invoice->metadata)
-        ? $invoice->metadata
-        : [];
-
+    $amount = number_format((float) $invoice->amount, 0);
     $currency = $invoice->currency ?: 'RWF';
-
-    $subtotalValue = (float) (
-        $metadata['subtotal']
-        ?? $invoice->amount
-    );
-
-    $vatRate = (float) (
-        $metadata['vat_rate']
-        ?? 0
-    );
-
-    $vatValue = (float) (
-        $metadata['vat_amount']
-        ?? $metadata['vat']
-        ?? 0
-    );
-
-    $totalValue = (float) (
-        $metadata['total_amount']
-        ?? $invoice->amount
-    );
-
-    $subtotal = number_format($subtotalValue, 0);
-    $vatAmount = number_format($vatValue, 0);
-    $totalAmount = number_format($totalValue, 0);
-
     $invoiceDate = optional($invoice->invoice_date)->format('M d, Y') ?: '—';
     $dueDate = optional($invoice->due_date)->format('M d, Y') ?: '—';
     $isReminder = $mode === 'reminder';
@@ -82,7 +53,7 @@
                                     </td>
 
                                     <td style="vertical-align:middle;">
-                                        <div style="font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#6b7280;margin-top:4px;line-height:1.4;">
+<div style="font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#6b7280;margin-top:4px;line-height:1.4;">
                                             Property Management Billing
                                         </div>
                                     </td>
@@ -215,20 +186,9 @@
                             </td>
 
                             <td align="right" style="padding:18px 16px;font-size:14px;font-weight:900;color:#111827;border-bottom:1px solid #e5e7eb;">
-                                {{ $currency }} {{ $subtotal }}
+                                {{ $currency }} {{ $amount }}
                             </td>
                         </tr>
-
-                        <tr>
-                            <td style="padding:16px;font-size:14px;color:#111827;border-bottom:1px solid #e5e7eb;">
-                                VAT ({{ number_format($vatRate, 0) }}%)
-                            </td>
-
-                            <td align="right" style="padding:16px;font-size:14px;font-weight:900;color:#111827;border-bottom:1px solid #e5e7eb;">
-                                {{ $currency }} {{ $vatAmount }}
-                            </td>
-                        </tr>
-
 
                         <tr style="background:#fff7ed;">
                             <td align="right" style="padding:18px 16px;font-size:14px;font-weight:900;color:#111827;">
@@ -236,7 +196,7 @@
                             </td>
 
                             <td align="right" style="padding:18px 16px;font-size:20px;font-weight:900;color:#ea580c;">
-                                {{ $currency }} {{ $totalAmount }}
+                                {{ $currency }} {{ $amount }}
                             </td>
                         </tr>
                     </tbody>
@@ -265,7 +225,7 @@
                     </div>
                 </div>
 
-                <p style="margin:26px 0 0;font-size:14px;line-height:1.8;color:#4b5563;">
+<p style="margin:26px 0 0;font-size:14px;line-height:1.8;color:#4b5563;">
                     Please contact our billing team if this payment has already been completed or if you need assistance regarding this invoice.
                 </p>
 

@@ -505,7 +505,8 @@
                 </div>
 
                 <div style="padding:9px;">
-                    Monthly invoice for Digital Growth, Marketing, Channel Distribution, and Hotel Technology Consultancy services for {{ $propertyName }}.
+                    Monthly property management invoice for
+                    {{ $propertyName }}.
                 </div>
             </td>
 
@@ -684,7 +685,7 @@
                     width="62%"
                     style="padding:5px 0;font-weight:800;"
                 >
-                    I&amp;M BANK Rwanda
+                    I&amp;M BANK
                 </td>
             </tr>
 
@@ -874,17 +875,11 @@
             by the due date shown on page 1.
         </p>
 
-        
         <p style="margin:10px 0 0;">
-            Contact the
-            <a
-                href="https://www.ashbhub.com/contact"
-                style="color:#ea580c;text-decoration:underline;font-weight:700;"
-            >African Safari &amp; Hotel Booking Hub billing team</a>
-            when you need clarification, a payment arrangement,
-            or payment confirmation.
+            Contact the ASHBHUB billing team when
+            you need clarification, a payment
+            arrangement, or payment confirmation.
         </p>
-
     </div>
 </body>
 </html>

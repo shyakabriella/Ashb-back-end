@@ -3,37 +3,8 @@
     $managerName = $invoice->manager_name ?: optional($property)->manager_name ?: 'Property Manager';
     $address = optional($property)->address ?: '';
     $location = optional($property)->location ?: '';
-    $metadata = is_array($invoice->metadata)
-        ? $invoice->metadata
-        : [];
-
+    $amount = number_format((float) $invoice->amount, 0);
     $currency = $invoice->currency ?: 'RWF';
-
-    $subtotalValue = (float) (
-        $metadata['subtotal']
-        ?? $invoice->amount
-    );
-
-    $vatRate = (float) (
-        $metadata['vat_rate']
-        ?? 0
-    );
-
-    $vatValue = (float) (
-        $metadata['vat_amount']
-        ?? $metadata['vat']
-        ?? 0
-    );
-
-    $totalValue = (float) (
-        $metadata['total_amount']
-        ?? $invoice->amount
-    );
-
-    $subtotal = number_format($subtotalValue, 0);
-    $vatAmount = number_format($vatValue, 0);
-    $totalAmount = number_format($totalValue, 0);
-
     $invoiceDate = optional($invoice->invoice_date)->format('M d, Y') ?: '—';
     $dueDate = optional($invoice->due_date)->format('M d, Y') ?: '—';
     $isReminder = $mode === 'reminder';
@@ -74,7 +45,7 @@
                                     <td style="vertical-align:middle;padding-right:14px;">
                                         <img
                                             src="{{ $logoUrl }}"
-                                            alt="Company logo"
+                                            alt="African Safari & Hotel Booking Hub"
                                             width="72"
                                             height="72"
                                             style="display:block;width:72px;height:72px;object-fit:contain;border-radius:14px;border:1px solid #f3f4f6;"
@@ -82,6 +53,10 @@
                                     </td>
 
                                     <td style="vertical-align:middle;">
+                                        <!-- <div style="font-size:14px;font-weight:900;letter-spacing:1.4px;text-transform:uppercase;color:#ea580c;line-height:1.4;">
+                                            African Safari & Hotel Booking Hub
+                                        </div> -->
+
                                         <div style="font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#6b7280;margin-top:4px;line-height:1.4;">
                                             Property Management Billing
                                         </div>
@@ -215,20 +190,9 @@
                             </td>
 
                             <td align="right" style="padding:18px 16px;font-size:14px;font-weight:900;color:#111827;border-bottom:1px solid #e5e7eb;">
-                                {{ $currency }} {{ $subtotal }}
+                                {{ $currency }} {{ $amount }}
                             </td>
                         </tr>
-
-                        <tr>
-                            <td style="padding:16px;font-size:14px;color:#111827;border-bottom:1px solid #e5e7eb;">
-                                VAT ({{ number_format($vatRate, 0) }}%)
-                            </td>
-
-                            <td align="right" style="padding:16px;font-size:14px;font-weight:900;color:#111827;border-bottom:1px solid #e5e7eb;">
-                                {{ $currency }} {{ $vatAmount }}
-                            </td>
-                        </tr>
-
 
                         <tr style="background:#fff7ed;">
                             <td align="right" style="padding:18px 16px;font-size:14px;font-weight:900;color:#111827;">
@@ -236,34 +200,11 @@
                             </td>
 
                             <td align="right" style="padding:18px 16px;font-size:20px;font-weight:900;color:#ea580c;">
-                                {{ $currency }} {{ $totalAmount }}
+                                {{ $currency }} {{ $amount }}
                             </td>
                         </tr>
                     </tbody>
                 </table>
-
-                
-                <div
-                    data-payment-instructions="true"
-                    style="margin-top:26px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:14px;padding:18px 20px;"
-                >
-                    <div style="font-size:12px;font-weight:900;color:#6b7280;text-transform:uppercase;letter-spacing:1px;">
-                        How to pay
-                    </div>
-
-                    <div style="margin-top:10px;font-size:15px;font-weight:900;color:#111827;">
-                        Pay securely by Bank Card
-                    </div>
-
-                    <div style="margin-top:7px;font-size:14px;line-height:1.7;color:#4b5563;">
-                        Use the secure payment button to continue to the protected payment page.
-                    </div>
-
-                    <div style="margin-top:10px;font-size:14px;color:#111827;">
-                        SWIFT/BIC code:
-                        <strong>IMRWRWRWXXX</strong>
-                    </div>
-                </div>
 
                 <p style="margin:26px 0 0;font-size:14px;line-height:1.8;color:#4b5563;">
                     Please contact our billing team if this payment has already been completed or if you need assistance regarding this invoice.
@@ -275,13 +216,13 @@
 
                 <p style="margin:26px 0 0;font-size:14px;line-height:1.8;color:#111827;">
                     Kind regards,<br>
-                    <strong>Billing Team</strong>
+                    <strong>African Safari & Hotel Booking Hub Billing Team</strong>
                 </p>
             </div>
         </div>
 
         <p style="text-align:center;font-size:12px;color:#9ca3af;margin-top:18px;line-height:1.6;">
-            This is an automated billing email.
+            This is an automated billing email from African Safari & Hotel Booking Hub.
         </p>
     </div>
 </body>
