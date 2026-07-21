@@ -1,5 +1,4 @@
 @php
-<<<<<<< HEAD
     $propertyName = $invoice->property_name ?: optional($property)->title ?: 'Property';
     $managerName = $invoice->manager_name ?: optional($property)->manager_name ?: 'Property Manager';
     $address = optional($property)->address ?: '';
@@ -39,17 +38,6 @@
     $dueDate = optional($invoice->due_date)->format('M d, Y') ?: '—';
     $isReminder = $mode === 'reminder';
     $daysBeforeDue = (int) ($daysBeforeDue ?? 0);
-=======
-    $propertyName = $invoice->property_name
-        ?: optional($property)->title
-        ?: 'Property';
-
-    $managerName = $invoice->manager_name
-        ?: optional($property)->manager_name
-        ?: 'Property Manager';
-
-    $currency = $invoice->currency ?: 'RWF';
->>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
 
     $amount = number_format(
         (float) $invoice->amount,
@@ -185,7 +173,6 @@
                     style="display:block;width:125px;max-width:125px;height:auto;margin:0 auto;border:0;"
                 >
 
-<<<<<<< HEAD
             <div style="padding:28px 32px;border-bottom:1px solid #e5e7eb;background:#ffffff;">
                 <table width="100%" cellpadding="0" cellspacing="0">
                     <tr>
@@ -222,13 +209,6 @@
                         </td>
                     </tr>
                 </table>
-=======
-                <div
-                    style="margin-top:14px;font-size:12px;font-weight:800;letter-spacing:1.3px;text-transform:uppercase;color:#F9A800;"
-                >
-                    African Safari &amp; Hotel Booking Hub
-                </div>
->>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
             </div>
 
             <div
@@ -372,7 +352,6 @@
                     </span>
                 </div>
 
-<<<<<<< HEAD
                             <td align="right" style="padding:18px 16px;font-size:14px;font-weight:900;color:#111827;border-bottom:1px solid #e5e7eb;">
                                 {{ $currency }} {{ $subtotal }}
                             </td>
@@ -426,87 +405,6 @@
 
                 <p style="margin:26px 0 0;font-size:14px;line-height:1.8;color:#4b5563;">
                     Please contact our billing team if this payment has already been completed or if you need assistance regarding this invoice.
-=======
-                <p
-                    style="margin:10px 0 0;font-size:14px;line-height:1.75;color:#374151;"
-                >
-                    Transfer the full invoice amount
-                    using the bank account details below.
-                </p>
-
-                <table
-                    role="presentation"
-                    width="100%"
-                    cellpadding="0"
-                    cellspacing="0"
-                    style="margin-top:14px;border-collapse:collapse;background:#fffaf2;border:1px solid #fed7aa;"
-                >
-                    <tr>
-                        <td
-                            width="38%"
-                            style="padding:10px 14px;border-bottom:1px solid #fed7aa;font-size:13px;color:#6b7280;"
-                        >
-                            Bank name
-                        </td>
-
-                        <td
-                            width="62%"
-                            style="padding:10px 14px;border-bottom:1px solid #fed7aa;font-size:13px;font-weight:800;color:#111827;"
-                        >
-                            I&amp;M BANK
-                        </td>
-                    </tr>
-
-                    <tr>
-                        <td
-                            style="padding:10px 14px;border-bottom:1px solid #fed7aa;font-size:13px;color:#6b7280;"
-                        >
-                            Account name
-                        </td>
-
-                        <td
-                            style="padding:10px 14px;border-bottom:1px solid #fed7aa;font-size:13px;font-weight:800;color:#111827;"
-                        >
-                            African Safari and Hotel Booking Hub Ltd
-                        </td>
-                    </tr>
-
-                    <tr>
-                        <td
-                            style="padding:10px 14px;border-bottom:1px solid #fed7aa;font-size:13px;color:#6b7280;"
-                        >
-                            Account number
-                        </td>
-
-                        <td
-                            style="padding:10px 14px;border-bottom:1px solid #fed7aa;font-size:14px;font-weight:900;color:#111827;"
-                        >
-                            20149677001
-                        </td>
-                    </tr>
-
-                    <tr>
-                        <td
-                            style="padding:10px 14px;font-size:13px;color:#6b7280;"
-                        >
-                            TIN
-                        </td>
-
-                        <td
-                            style="padding:10px 14px;font-size:13px;font-weight:800;color:#111827;"
-                        >
-                            147893300
-                        </td>
-                    </tr>
-                </table>
-
-                <p
-                    style="margin:12px 0 0;font-size:13px;line-height:1.7;color:#6b7280;"
-                >
-                    Please use the property name as the
-                    transfer reference so our billing team
-                    can identify your payment quickly.
->>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
                 </p>
 
                 <!-- Bank card -->
@@ -595,30 +493,14 @@
                     style="margin:28px 0 0;font-size:14px;line-height:1.75;color:#111827;"
                 >
                     Kind regards,<br>
-<<<<<<< HEAD
                     <strong>Billing Team</strong>
-=======
-                    <strong>
-                        Billing &amp; Collections Team
-                    </strong><br>
-                    African Safari &amp; Hotel Booking Hub
->>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
                 </p>
             </div>
         </div>
 
-<<<<<<< HEAD
         <p style="text-align:center;font-size:12px;color:#9ca3af;margin-top:18px;line-height:1.6;">
             This is an automated billing email.
         </p>
-=======
-        <div
-            style="padding:20px 10px 0;text-align:center;font-size:12px;line-height:1.65;color:#9ca3af;"
-        >
-            African Safari &amp; Hotel Booking Hub Ltd<br>
-            TIN: 147893300 · Kigali, Rwanda
-        </div>
->>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
     </div>
 </body>
 </html>
