@@ -45,7 +45,7 @@
                                     <td style="vertical-align:middle;padding-right:14px;">
                                         <img
                                             src="{{ $logoUrl }}"
-                                            alt="African Safari & Hotel Booking Hub"
+                                            alt="Company logo"
                                             width="72"
                                             height="72"
                                             style="display:block;width:72px;height:72px;object-fit:contain;border-radius:14px;border:1px solid #f3f4f6;"
@@ -53,10 +53,6 @@
                                     </td>
 
                                     <td style="vertical-align:middle;">
-                                        <div style="font-size:14px;font-weight:900;letter-spacing:1.4px;text-transform:uppercase;color:#ea580c;line-height:1.4;">
-                                            African Safari & Hotel Booking Hub
-                                        </div>
-
                                         <div style="font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#6b7280;margin-top:4px;line-height:1.4;">
                                             Property Management Billing
                                         </div>
@@ -206,6 +202,29 @@
                     </tbody>
                 </table>
 
+                
+                <div
+                    data-payment-instructions="true"
+                    style="margin-top:26px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:14px;padding:18px 20px;"
+                >
+                    <div style="font-size:12px;font-weight:900;color:#6b7280;text-transform:uppercase;letter-spacing:1px;">
+                        How to pay
+                    </div>
+
+                    <div style="margin-top:10px;font-size:15px;font-weight:900;color:#111827;">
+                        Pay securely by Bank Card
+                    </div>
+
+                    <div style="margin-top:7px;font-size:14px;line-height:1.7;color:#4b5563;">
+                        Use the secure payment button to continue to the protected payment page.
+                    </div>
+
+                    <div style="margin-top:10px;font-size:14px;color:#111827;">
+                        SWIFT/BIC code:
+                        <strong>IMRWRWRWXXX</strong>
+                    </div>
+                </div>
+
                 <p style="margin:26px 0 0;font-size:14px;line-height:1.8;color:#4b5563;">
                     Please contact our billing team if this payment has already been completed or if you need assistance regarding this invoice.
                 </p>
@@ -216,13 +235,13 @@
 
                 <p style="margin:26px 0 0;font-size:14px;line-height:1.8;color:#111827;">
                     Kind regards,<br>
-                    <strong>African Safari & Hotel Booking Hub Billing Team</strong>
+                    <strong>Billing Team</strong>
                 </p>
             </div>
         </div>
 
         <p style="text-align:center;font-size:12px;color:#9ca3af;margin-top:18px;line-height:1.6;">
-            This is an automated billing email from African Safari & Hotel Booking Hub.
+            This is an automated billing email.
         </p>
     </div>
 </body>
