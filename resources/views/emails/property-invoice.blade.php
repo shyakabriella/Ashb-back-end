@@ -1,4 +1,6 @@
 @php
+    $isReminder =
+        ($mode ?? 'invoice') === 'reminder';
     $propertyName = $invoice->property_name
         ?: optional($property)->title
         ?: 'Property';
@@ -169,7 +171,8 @@
                                 African Safari &amp; Hotel Booking Hub.
                             </p>
 
-                            <p
+                            @if ($isReminder)
+        <p
                                 style="
                                     margin:20px 0 0;
                                     font-size:18px;
@@ -177,14 +180,30 @@
                                     color:#16213a;
                                 "
                             >
-                                We hope you are doing well. According to our
-                                records, the invoice below remains outstanding.
-                                We kindly request that you review the details
-                                and arrange payment at your earliest convenience.
-                                If payment has already been completed, please
-                                disregard this reminder and send us the payment
-                                confirmation.
-                            </p>
+            We hope you are doing well. According to our
+            records, the invoice below remains outstanding.
+            We kindly request that you review the details
+            and arrange payment at your earliest convenience.
+            If payment has already been completed, please
+            disregard this reminder and send us the payment
+            confirmation.
+        </p>
+    @else
+        <p
+                                style="
+                                    margin:20px 0 0;
+                                    font-size:18px;
+                                    line-height:1.8;
+                                    color:#16213a;
+                                "
+                            >
+            Please find attached your monthly billing invoice.
+            Kindly review the invoice details and arrange
+            payment by the due date shown below. Please
+            contact our billing team when you need
+            clarification or a payment arrangement.
+        </p>
+    @endif
 
                             <!-- Invoice summary heading -->
                             <h1
@@ -196,7 +215,10 @@
                                     font-weight:800;
                                 "
                             >
-                                Summary of your outstanding invoice
+                                {{ $isReminder
+            ? 'Summary of your outstanding invoice'
+            : 'Summary of your monthly billing invoice'
+        }}
                             </h1>
 
                             <!-- Invoice summary table -->
