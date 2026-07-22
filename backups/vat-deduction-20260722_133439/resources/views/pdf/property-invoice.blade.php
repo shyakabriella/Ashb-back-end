@@ -865,46 +865,6 @@
                 >
                     {{ $currency }}
                     {{ number_format(
-                        $amountValue,
-                        0
-                    ) }}
-                </td>
-            </tr>
-<tr>
-                <td
-                    colspan="2"
-                    class="right"
-                    style="font-weight:800;"
-                >
-                    VAT ({{ number_format($vatRate, 0) }}%):
-                </td>
-
-                <td
-                    class="right"
-                    style="font-weight:800;"
-                >
-                    {{ $currency }}
-                    {{ number_format(
-                        $vat,
-                        0
-                    ) }}
-                </td>
-            </tr>
-<tr>
-                <td
-                    colspan="2"
-                    class="right"
-                    style="font-weight:800;"
-                >
-                    Total:
-                </td>
-
-                <td
-                    class="right"
-                    style="font-weight:800;"
-                >
-                    {{ $currency }}
-                    {{ number_format(
                         $invoiceTotal,
                         0
                     ) }}

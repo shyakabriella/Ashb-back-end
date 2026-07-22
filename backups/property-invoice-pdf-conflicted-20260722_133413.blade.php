@@ -15,11 +15,16 @@
         ?: '';
 
     $currency = $invoice->currency ?: 'RWF';
+<<<<<<< HEAD
+=======
+    $amountValue = (float) $invoice->amount;
+>>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
 
     $metadata = is_array($invoice->metadata)
         ? $invoice->metadata
         : [];
 
+<<<<<<< HEAD
     /*
      * invoice.amount contains the final payable total.
      * The VAT breakdown is stored in metadata.
@@ -66,11 +71,28 @@
             - $credits,
             0
         )
+=======
+    $balanceCarriedForward = (float) (
+        $metadata['balance_carried_forward'] ?? 0
+    );
+
+    $vat = (float) (
+        $metadata['vat'] ?? 0
+    );
+
+    $adjustments = (float) (
+        $metadata['adjustments'] ?? 0
+    );
+
+    $credits = (float) (
+        $metadata['credits'] ?? 0
+>>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
     );
 
     $payments = strtolower(
         (string) $invoice->payment_status
     ) === 'paid'
+<<<<<<< HEAD
         ? $invoiceTotal
         : (float) (
             $metadata['payments']
@@ -81,6 +103,27 @@
         $balanceCarriedForward
         + $invoiceTotal
         - $payments,
+        0
+    );
+
+=======
+        ? $amountValue
+        : (float) (
+            $metadata['payments'] ?? 0
+        );
+
+    $invoiceTotal = max(
+        $amountValue
+            + $vat
+            + $adjustments
+            - $credits,
+        0
+    );
+
+    $totalBalance = max(
+        $balanceCarriedForward
+            + $invoiceTotal
+            - $payments,
         0
     );
 
@@ -104,6 +147,7 @@
         $dueDateObject = null;
     }
 
+>>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
     $invoiceDate = $invoiceDateObject
         ? $invoiceDateObject->format('d M Y')
         : '—';
@@ -285,7 +329,13 @@
 </head>
 
 <body>
+<<<<<<< HEAD
 
+=======
+    <div class="footer">
+        African Safari & Hotel Booking Hub
+    </div>
+>>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
 
     <table width="100%">
         <tr>
@@ -317,7 +367,13 @@
                 valign="top"
                 class="right"
             >
+<<<<<<< HEAD
 
+=======
+                <div style="font-weight:800;">
+                    African Safari & Hotel Booking Hub Ltd
+                </div>
+>>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
 
                 <div class="small muted">
                     Kigali, Rwanda
@@ -525,7 +581,12 @@
                 </div>
 
                 <div style="padding:9px;">
+<<<<<<< HEAD
                     Monthly invoice for Digital Growth, Marketing, Channel Distribution, and Hotel Technology Consultancy services for {{ $propertyName }}.
+=======
+                    Monthly property management invoice for
+                    {{ $propertyName }}.
+>>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
                 </div>
             </td>
 
@@ -556,7 +617,11 @@
                     </tr>
 
                     <tr>
+<<<<<<< HEAD
                         <td>VAT ({{ number_format($vatRate, 0) }}%):</td>
+=======
+                        <td>VAT:</td>
+>>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
 
                         <td class="right">
                             {{ $currency }}
@@ -653,7 +718,10 @@
         >
             Pay securely by Bank Card
         </div>
+<<<<<<< HEAD
         <div style="margin-top:6px;font-weight:800;">SWIFT/BIC code: IMRWRWRWXXX</div>
+=======
+>>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
 
         <div style="margin-top:6px;">
             Use our secure payment page to pay using
@@ -704,7 +772,11 @@
                     width="62%"
                     style="padding:5px 0;font-weight:800;"
                 >
+<<<<<<< HEAD
                     I&amp;M BANK Rwanda
+=======
+                    I&amp;M BANK
+>>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
                 </td>
             </tr>
 
@@ -718,7 +790,11 @@
                 <td
                     style="padding:5px 0;font-weight:800;"
                 >
-                    African Safari &amp; Hotel Booking Hub Ltd
+<<<<<<< HEAD
+                    
+=======
+                    African Safari and Hotel Booking Hub Ltd
+>>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
                 </td>
             </tr>
 
@@ -788,7 +864,13 @@
                 valign="top"
                 class="right"
             >
+<<<<<<< HEAD
 
+=======
+                <div style="font-weight:800;">
+                    African Safari & Hotel Booking Hub Ltd
+                </div>
+>>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
 
                 <div class="small muted">
                     Kigali, Rwanda
@@ -865,46 +947,6 @@
                 >
                     {{ $currency }}
                     {{ number_format(
-                        $amountValue,
-                        0
-                    ) }}
-                </td>
-            </tr>
-<tr>
-                <td
-                    colspan="2"
-                    class="right"
-                    style="font-weight:800;"
-                >
-                    VAT ({{ number_format($vatRate, 0) }}%):
-                </td>
-
-                <td
-                    class="right"
-                    style="font-weight:800;"
-                >
-                    {{ $currency }}
-                    {{ number_format(
-                        $vat,
-                        0
-                    ) }}
-                </td>
-            </tr>
-<tr>
-                <td
-                    colspan="2"
-                    class="right"
-                    style="font-weight:800;"
-                >
-                    Total:
-                </td>
-
-                <td
-                    class="right"
-                    style="font-weight:800;"
-                >
-                    {{ $currency }}
-                    {{ number_format(
                         $invoiceTotal,
                         0
                     ) }}
@@ -934,6 +976,7 @@
             by the due date shown on page 1.
         </p>
 
+<<<<<<< HEAD
         
         <p style="margin:10px 0 0;">
             Contact the
@@ -945,6 +988,13 @@
             or payment confirmation.
         </p>
 
+=======
+        <p style="margin:10px 0 0;">
+            Contact the ASHBHUB billing team when
+            you need clarification, a payment
+            arrangement, or payment confirmation.
+        </p>
+>>>>>>> 9e34846c2cf299ad3ddf53696ddb32db562f8403
     </div>
 </body>
 </html>
