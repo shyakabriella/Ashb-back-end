@@ -274,13 +274,13 @@
                                     font-weight:800;
                                 "
                             >
-                                @if ($isOutstandingReminder)
-                                    Summary of your outstanding invoice
-                                @elseif ($isUpcomingReminder)
-                                    Summary of your upcoming payment
-                                @else
-                                    Summary of your monthly billing invoice
-                                @endif
+                                {{ $isReminder
+            ? '{{ $isOutstandingReminder
+            ? 'Summary of your outstanding invoice'
+            : 'Summary of your invoice'
+        }}'
+            : 'Summary of your monthly billing invoice'
+        }}
                             </h1>
 
                             <!-- Invoice summary table -->

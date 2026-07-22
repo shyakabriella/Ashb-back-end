@@ -152,135 +152,15 @@
                                 "
                             >
                                 <img
-                                    src="{{ $logoUrl }}"
-                                    alt="African Safari & Hotel Booking Hub"
-                                    width="125"
-                                    style="
-                                        display:block;
-                                        width:125px;
-                                        max-width:125px;
-                                        height:auto;
-                                        margin:0 auto;
-                                        border:0;
-                                    "
-                                >
-                            </div>
-
-                            <!-- Greeting -->
-                            <p
-                                style="
-                                    margin:56px 0 0;
-                                    font-size:18px;
-                                    line-height:1.7;
-                                    color:#16213a;
-                                "
-                            >
-                                Dear {{ $managerName }},
-                            </p>
-
-                            <p
-                                style="
-                                    margin:22px 0 0;
-                                    font-size:18px;
-                                    line-height:1.7;
-                                    color:#16213a;
-                                "
-                            >
-                                Thank you for your continued partnership with
-                                African Safari &amp; Hotel Booking Hub.
-                            </p>
-
-                            @if ($isReminder)
-        @if ($isUpcomingReminder)
-        <p
-                                style="
-                                    margin:20px 0 0;
-                                    font-size:18px;
-                                    line-height:1.8;
-                                    color:#16213a;
-                                "
-                            >
-            We hope you are doing well. This is a friendly
-            reminder that the payment date for the invoice
-            below is approaching.
-
-            You have
-            <strong>{{ $remainingDaysText }}</strong>
-            remaining before this invoice becomes overdue.
-
-            Please review the invoice details and arrange
-            payment on or before the due date. If payment
-            has already been completed, please disregard
-            this reminder and send us the payment
-            confirmation.
-        </p>
-    @elseif ($isOutstandingReminder)
-        <p
-                                style="
-                                    margin:20px 0 0;
-                                    font-size:18px;
-                                    line-height:1.8;
-                                    color:#16213a;
-                                "
-                            >
-            We hope you are doing well. According to our
-            records, the invoice below remains outstanding.
-
-            We kindly request that you review the details
-            and arrange payment at your earliest convenience.
-            If payment has already been completed, please
-            disregard this reminder and send us the payment
-            confirmation.
-        </p>
-    @else
-        <p
-                                style="
-                                    margin:20px 0 0;
-                                    font-size:18px;
-                                    line-height:1.8;
-                                    color:#16213a;
-                                "
-                            >
-            We hope you are doing well. Please find attached
-            your monthly billing invoice. Kindly review the
-            invoice details and arrange payment by the due
-            date shown below.
-        </p>
-    @endif
-    @else
-        <p
-                                style="
-                                    margin:20px 0 0;
-                                    font-size:18px;
-                                    line-height:1.8;
-                                    color:#16213a;
-                                "
-                            >
-            Please find attached your monthly billing invoice.
-            Kindly review the invoice details and arrange
-            payment by the due date shown below. Please
-            contact our billing team when you need
-            clarification or a payment arrangement.
-        </p>
-    @endif
-
-                            <!-- Invoice summary heading -->
-                            <h1
-                                style="
-                                    margin:38px 0 26px;
-                                    font-size:31px;
-                                    line-height:1.25;
-                                    color:#0b1325;
-                                    font-weight:800;
-                                "
-                            >
-                                @if ($isOutstandingReminder)
-                                    Summary of your outstanding invoice
-                                @elseif ($isUpcomingReminder)
-                                    Summary of your upcoming payment
-                                @else
-                                    Summary of your monthly billing invoice
-                                @endif
+                                    src="@if ($isOutstandingReminder)
+                            Summary of your outstanding invoice
+                        @elseif ($isUpcomingReminder)
+                            Summary of your upcoming payment
+                        @else
+                            Summary of your billing invoice
+                        @endif'
+            : 'Summary of your monthly billing invoice'
+        }}
                             </h1>
 
                             <!-- Invoice summary table -->
