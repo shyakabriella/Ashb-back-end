@@ -653,6 +653,7 @@
         >
             Pay securely by Bank Card
         </div>
+        <div style="margin-top:6px;font-weight:800;">SWIFT/BIC code: IMRWRWRWXXX</div>
 
         <div style="margin-top:6px;">
             Use our secure payment page to pay using
@@ -704,21 +705,6 @@
                     style="padding:5px 0;font-weight:800;"
                 >
                     I&amp;M BANK Rwanda
-                </td>
-            </tr>
-<tr>
-                <td
-                    width="38%"
-                    style="padding:5px 0;color:#6b7280;"
-                >
-                    SWIFT/BIC code
-                </td>
-
-                <td
-                    width="62%"
-                    style="padding:5px 0;font-weight:800;"
-                >
-                    IMRWRWRWXXX
                 </td>
             </tr>
 
