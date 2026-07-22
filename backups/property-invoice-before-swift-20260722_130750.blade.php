@@ -440,33 +440,7 @@
                                             font-weight:800;
                                         "
                                     >
-                                        I&amp;M BANK Rwanda
-                                    </td>
-                                </tr>
-<tr>
-                                    <td
-                                        width="40%"
-                                        style="
-                                            padding:14px 18px;
-                                            border-bottom:1px solid #fdba74;
-                                            color:#64748b;
-                                            font-size:16px;
-                                        "
-                                    >
-                                        SWIFT/BIC code
-                                    </td>
-
-                                    <td
-                                        width="60%"
-                                        style="
-                                            padding:14px 18px;
-                                            border-bottom:1px solid #fdba74;
-                                            color:#071126;
-                                            font-size:16px;
-                                            font-weight:800;
-                                        "
-                                    >
-                                        IMRWRWRWXXX
+                                        I&amp;M BANK
                                     </td>
                                 </tr>
 
