@@ -37,7 +37,8 @@
      * VAT remains visible only in the attached PDF.
      */
     $subtotalValue = (float) (
-        $invoice->amount
+        $metadata['subtotal']
+        ?? $invoice->amount
         ?? 0
     );
 
