@@ -1,25 +1,6 @@
 @php
     $isReminder =
         ($mode ?? 'invoice') === 'reminder';
-
-    $daysBeforeDue = max(
-        0,
-        (int) ($daysBeforeDue ?? 0)
-    );
-
-    $isUpcomingReminder =
-        $isReminder
-        && $daysBeforeDue > 0;
-
-    $isOutstandingReminder =
-        $isReminder
-        && $daysBeforeDue === 0;
-
-    $remainingDaysText =
-        $daysBeforeDue === 1
-            ? '1 day'
-            : $daysBeforeDue . ' days';
-
     $propertyName = $invoice->property_name
         ?: optional($property)->title
         ?: 'Property';
@@ -191,30 +172,6 @@
                             </p>
 
                             @if ($isReminder)
-        @if ($isUpcomingReminder)
-        <p
-                                style="
-                                    margin:20px 0 0;
-                                    font-size:18px;
-                                    line-height:1.8;
-                                    color:#16213a;
-                                "
-                            >
-            We hope you are doing well. This is a friendly
-            reminder that the payment date for the invoice
-            below is approaching.
-
-            You have
-            <strong>{{ $remainingDaysText }}</strong>
-            remaining before this invoice becomes overdue.
-
-            Please review the invoice details and arrange
-            payment on or before the due date. If payment
-            has already been completed, please disregard
-            this reminder and send us the payment
-            confirmation.
-        </p>
-    @elseif ($isOutstandingReminder)
         <p
                                 style="
                                     margin:20px 0 0;
@@ -225,28 +182,12 @@
                             >
             We hope you are doing well. According to our
             records, the invoice below remains outstanding.
-
             We kindly request that you review the details
             and arrange payment at your earliest convenience.
             If payment has already been completed, please
             disregard this reminder and send us the payment
             confirmation.
         </p>
-    @else
-        <p
-                                style="
-                                    margin:20px 0 0;
-                                    font-size:18px;
-                                    line-height:1.8;
-                                    color:#16213a;
-                                "
-                            >
-            We hope you are doing well. Please find attached
-            your monthly billing invoice. Kindly review the
-            invoice details and arrange payment by the due
-            date shown below.
-        </p>
-    @endif
     @else
         <p
                                 style="
@@ -275,10 +216,7 @@
                                 "
                             >
                                 {{ $isReminder
-            ? '{{ $isOutstandingReminder
             ? 'Summary of your outstanding invoice'
-            : 'Summary of your invoice'
-        }}'
             : 'Summary of your monthly billing invoice'
         }}
                             </h1>

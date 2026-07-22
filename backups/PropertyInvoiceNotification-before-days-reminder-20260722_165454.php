@@ -97,34 +97,23 @@ class PropertyInvoiceNotification extends Notification
             ],
             true
         );
-        $daysBeforeDue =
-            $this->resolvedDaysBeforeDue();
 
-        $isReminder =
-            $this->mode === 'reminder';
-
-        $isOutstandingReminder =
-            $isReminder
-            && $daysBeforeDue === 0;
+        $isOverdue = !$isPaid
+            && $invoice->due_date
+            && $invoice->due_date->isPast();
 
         $subject = match (true) {
-            $isOutstandingReminder =>
-                'Outstanding invoice - '
-                    . $propertyName,
+            $isOverdue =>
+                'Payment reminder - '
+                . $propertyName,
 
-            $isReminder && $daysBeforeDue === 1 =>
-                'Payment due in 1 day - '
-                    . $propertyName,
-
-            $isReminder =>
-                'Payment due in '
-                    . $daysBeforeDue
-                    . ' days - '
-                    . $propertyName,
+            $this->mode === 'reminder' =>
+                'Payment reminder - '
+                . $propertyName,
 
             default =>
                 'Property invoice - '
-                    . $propertyName,
+                . $propertyName,
         };
 
         $pdf = Pdf::loadView(
