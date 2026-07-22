@@ -308,7 +308,7 @@
                 @endif
 
                 <div class="invoice-title">
-                    Billing Invoice
+                    Tax Invoice
                 </div>
             </td>
 
