@@ -143,6 +143,19 @@
                                         border:0;
                                     "
                                 >
+
+                                <div
+                                    style="
+                                        margin-top:16px;
+                                        color:#f59e0b;
+                                        font-size:15px;
+                                        font-weight:800;
+                                        letter-spacing:2px;
+                                        text-transform:uppercase;
+                                    "
+                                >
+                                    African Safari &amp; Hotel Booking Hub
+                                </div>
                             </div>
 
                             <!-- Greeting -->
