@@ -223,142 +223,6 @@
         )
     );
 
-    // Complete monthly rows for direct previews.
-    $outstandingInvoiceRows = collect(
-        $outstandingInvoiceRows ?? []
-    );
-
-    if ($outstandingInvoiceRows->isEmpty()) {
-        $outstandingInvoiceRows =
-            $previousUnpaidInvoices
-                ->map(
-                    function (
-                        $previousInvoice
-                    ): array {
-                        return [
-                            'period_label' =>
-                                'Previous month',
-
-                            'billing_month' =>
-                                $previousInvoice
-                                    ->getAttribute(
-                                        'display_billing_month'
-                                    ),
-
-                            'invoice_number' =>
-                                $previousInvoice
-                                    ->invoice_number
-                                ?: 'Invoice #'
-                                    . $previousInvoice->id,
-
-                            'invoice_date' =>
-                                optional(
-                                    $previousInvoice
-                                        ->invoice_date
-                                )->format('d M Y')
-                                ?: '—',
-
-                            'due_date' =>
-                                $previousInvoice
-                                    ->getAttribute(
-                                        'display_due_date'
-                                    ),
-
-                            'subtotal' =>
-                                (float)
-                                $previousInvoice
-                                    ->getAttribute(
-                                        'display_subtotal'
-                                    ),
-
-                            'vat_amount' =>
-                                (float)
-                                $previousInvoice
-                                    ->getAttribute(
-                                        'display_vat_amount'
-                                    ),
-
-                            'outstanding' =>
-                                (float)
-                                $previousInvoice
-                                    ->getAttribute(
-                                        'display_total_amount'
-                                    ),
-
-                            'is_current' => false,
-                        ];
-                    }
-                )
-                ->values();
-
-        $currentOutstandingVat = (float) (
-            $currentInvoiceMetadata[
-                'vat_amount'
-            ]
-            ?? $currentInvoiceMetadata['vat']
-            ?? 0
-        );
-
-        $currentOutstandingSubtotal =
-            $currentIsLegacyAddedVat
-                ? max(
-                    $resolvedCurrentTotal
-                    - $currentOutstandingVat,
-                    0
-                )
-                : (float) (
-                    $currentInvoiceMetadata[
-                        'subtotal'
-                    ]
-                    ?? max(
-                        $resolvedCurrentTotal
-                        - $currentOutstandingVat,
-                        0
-                    )
-                );
-
-        if ($currentOutstandingAmount > 0) {
-            $outstandingInvoiceRows->push([
-                'period_label' =>
-                    'Current month',
-
-                'billing_month' =>
-                    optional(
-                        $invoice->invoice_date
-                    )->format('F Y')
-                    ?: '—',
-
-                'invoice_number' =>
-                    $invoice->invoice_number
-                    ?: 'Invoice #'
-                        . $invoice->id,
-
-                'invoice_date' =>
-                    optional(
-                        $invoice->invoice_date
-                    )->format('d M Y')
-                    ?: '—',
-
-                'due_date' =>
-                    optional(
-                        $invoice->due_date
-                    )->format('d M Y')
-                    ?: '—',
-
-                'subtotal' =>
-                    $currentOutstandingSubtotal,
-
-                'vat_amount' =>
-                    $currentOutstandingVat,
-
-                'outstanding' =>
-                    $currentOutstandingAmount,
-
-                'is_current' => true,
-            ]);
-        }
-    }
-
     $isReminder =
         ($mode ?? 'invoice') === 'reminder';
 
@@ -784,8 +648,8 @@
                             </table>
 
 
-                            @if ($outstandingInvoiceRows->isNotEmpty())
-                                <!-- Clear monthly outstanding invoices -->
+                            @if ($previousUnpaidInvoices->isNotEmpty())
+                                <!-- Previous unpaid invoices -->
                                 <div
                                     style="
                                         margin-top:34px;
@@ -797,249 +661,27 @@
                                 >
                                     <h2
                                         style="
-                                            margin:0;
+                                            margin:0 0 8px;
                                             color:#071126;
                                             font-size:22px;
                                             line-height:1.3;
                                             font-weight:800;
                                         "
                                     >
-                                        Outstanding invoice history
+                                        Previous unpaid invoices
                                     </h2>
 
                                     <p
                                         style="
-                                            margin:8px 0 20px;
+                                            margin:0 0 18px;
                                             color:#40506c;
                                             font-size:14px;
                                             line-height:1.6;
                                         "
                                     >
-                                        Each unpaid billing month is shown
-                                        separately below with its invoice
-                                        date, due date, VAT breakdown and
-                                        outstanding balance.
+                                        The invoices below are from previous
+                                        billing months and remain unpaid.
                                     </p>
-
-                                    @foreach ($outstandingInvoiceRows as $row)
-                                        <div
-                                            style="
-                                                margin-top:15px;
-                                                padding:17px;
-                                                background:#ffffff;
-                                                border:1px solid #ead9b4;
-                                                border-left:5px solid {{ $row['is_current']
-                                                    ? '#f5a900'
-                                                    : '#9ca3af' }};
-                                                border-radius:8px;
-                                            "
-                                        >
-                                            <table
-                                                role="presentation"
-                                                width="100%"
-                                                cellpadding="0"
-                                                cellspacing="0"
-                                                border="0"
-                                            >
-                                                <tr>
-                                                    <td
-                                                        style="
-                                                            color:#071126;
-                                                            font-size:16px;
-                                                            font-weight:900;
-                                                        "
-                                                    >
-                                                        {{ strtoupper(
-                                                            $row['period_label']
-                                                        ) }}
-                                                        —
-                                                        {{ $row['billing_month'] }}
-                                                    </td>
-
-                                                    <td
-                                                        align="right"
-                                                        style="
-                                                            color:#e11d2e;
-                                                            font-size:16px;
-                                                            font-weight:900;
-                                                        "
-                                                    >
-                                                        {{ $currency }}
-                                                        {{ number_format(
-                                                            $row['outstanding'],
-                                                            0
-                                                        ) }}
-                                                    </td>
-                                                </tr>
-                                            </table>
-
-                                            <table
-                                                role="presentation"
-                                                width="100%"
-                                                cellpadding="0"
-                                                cellspacing="0"
-                                                border="0"
-                                                style="
-                                                    margin-top:13px;
-                                                    border-collapse:collapse;
-                                                "
-                                            >
-                                                <tr>
-                                                    <td
-                                                        width="43%"
-                                                        style="
-                                                            padding:6px 0;
-                                                            color:#6b7280;
-                                                            font-size:13px;
-                                                        "
-                                                    >
-                                                        Invoice number
-                                                    </td>
-
-                                                    <td
-                                                        style="
-                                                            padding:6px 0;
-                                                            color:#16213a;
-                                                            font-size:13px;
-                                                            font-weight:700;
-                                                        "
-                                                    >
-                                                        {{ $row['invoice_number'] }}
-                                                    </td>
-                                                </tr>
-
-                                                <tr>
-                                                    <td
-                                                        style="
-                                                            padding:6px 0;
-                                                            color:#6b7280;
-                                                            font-size:13px;
-                                                        "
-                                                    >
-                                                        Invoice date
-                                                    </td>
-
-                                                    <td
-                                                        style="
-                                                            padding:6px 0;
-                                                            color:#16213a;
-                                                            font-size:13px;
-                                                            font-weight:700;
-                                                        "
-                                                    >
-                                                        {{ $row['invoice_date'] }}
-                                                    </td>
-                                                </tr>
-
-                                                <tr>
-                                                    <td
-                                                        style="
-                                                            padding:6px 0;
-                                                            color:#6b7280;
-                                                            font-size:13px;
-                                                        "
-                                                    >
-                                                        Payment due date
-                                                    </td>
-
-                                                    <td
-                                                        style="
-                                                            padding:6px 0;
-                                                            color:#16213a;
-                                                            font-size:13px;
-                                                            font-weight:700;
-                                                        "
-                                                    >
-                                                        {{ $row['due_date'] }}
-                                                    </td>
-                                                </tr>
-
-                                                <tr>
-                                                    <td
-                                                        style="
-                                                            padding:6px 0;
-                                                            color:#6b7280;
-                                                            font-size:13px;
-                                                        "
-                                                    >
-                                                        New charge
-                                                    </td>
-
-                                                    <td
-                                                        style="
-                                                            padding:6px 0;
-                                                            color:#16213a;
-                                                            font-size:13px;
-                                                            font-weight:700;
-                                                        "
-                                                    >
-                                                        {{ $currency }}
-                                                        {{ number_format(
-                                                            $row['subtotal'],
-                                                            0
-                                                        ) }}
-                                                    </td>
-                                                </tr>
-
-                                                <tr>
-                                                    <td
-                                                        style="
-                                                            padding:6px 0;
-                                                            color:#6b7280;
-                                                            font-size:13px;
-                                                        "
-                                                    >
-                                                        VAT included
-                                                    </td>
-
-                                                    <td
-                                                        style="
-                                                            padding:6px 0;
-                                                            color:#16213a;
-                                                            font-size:13px;
-                                                            font-weight:700;
-                                                        "
-                                                    >
-                                                        {{ $currency }}
-                                                        {{ number_format(
-                                                            $row['vat_amount'],
-                                                            0
-                                                        ) }}
-                                                    </td>
-                                                </tr>
-
-                                                <tr>
-                                                    <td
-                                                        style="
-                                                            padding:9px 0 5px;
-                                                            border-top:1px solid #ead9b4;
-                                                            color:#071126;
-                                                            font-size:14px;
-                                                            font-weight:900;
-                                                        "
-                                                    >
-                                                        Month outstanding
-                                                    </td>
-
-                                                    <td
-                                                        style="
-                                                            padding:9px 0 5px;
-                                                            border-top:1px solid #ead9b4;
-                                                            color:#071126;
-                                                            font-size:14px;
-                                                            font-weight:900;
-                                                        "
-                                                    >
-                                                        {{ $currency }}
-                                                        {{ number_format(
-                                                            $row['outstanding'],
-                                                            0
-                                                        ) }}
-                                                    </td>
-                                                </tr>
-                                            </table>
-                                        </div>
-                                    @endforeach
 
                                     <table
                                         role="presentation"
@@ -1048,98 +690,246 @@
                                         cellspacing="0"
                                         border="0"
                                         style="
-                                            margin-top:18px;
+                                            width:100%;
                                             border-collapse:collapse;
                                         "
                                     >
-                                        <tr>
-                                            <td
-                                                style="
-                                                    padding:12px 8px;
-                                                    color:#40506c;
-                                                    font-size:14px;
-                                                    font-weight:800;
-                                                "
-                                            >
-                                                Previous months outstanding
-                                            </td>
+                                        <thead>
+                                            <tr>
+                                                <th
+                                                    align="left"
+                                                    width="39%"
+                                                    style="
+                                                        padding:10px 6px;
+                                                        border-bottom:1px solid #d7b76f;
+                                                        color:#40506c;
+                                                        font-size:13px;
+                                                    "
+                                                >
+                                                    Billing month / invoice
+                                                </th>
 
-                                            <td
-                                                align="right"
-                                                style="
-                                                    padding:12px 8px;
-                                                    color:#40506c;
-                                                    font-size:14px;
-                                                    font-weight:800;
-                                                "
-                                            >
-                                                {{ $currency }}
-                                                {{ number_format(
-                                                    $previousOutstandingTotal,
-                                                    0
-                                                ) }}
-                                            </td>
-                                        </tr>
+                                                <th
+                                                    align="left"
+                                                    width="33%"
+                                                    style="
+                                                        padding:10px 6px;
+                                                        border-bottom:1px solid #d7b76f;
+                                                        color:#40506c;
+                                                        font-size:13px;
+                                                    "
+                                                >
+                                                    Breakdown
+                                                </th>
 
-                                        <tr>
-                                            <td
-                                                style="
-                                                    padding:12px 8px;
-                                                    color:#40506c;
-                                                    font-size:14px;
-                                                    font-weight:800;
-                                                "
-                                            >
-                                                Current month outstanding
-                                            </td>
+                                                <th
+                                                    align="right"
+                                                    width="28%"
+                                                    style="
+                                                        padding:10px 6px;
+                                                        border-bottom:1px solid #d7b76f;
+                                                        color:#40506c;
+                                                        font-size:13px;
+                                                    "
+                                                >
+                                                    Outstanding
+                                                </th>
+                                            </tr>
+                                        </thead>
 
-                                            <td
-                                                align="right"
-                                                style="
-                                                    padding:12px 8px;
-                                                    color:#40506c;
-                                                    font-size:14px;
-                                                    font-weight:800;
-                                                "
-                                            >
-                                                {{ $currency }}
-                                                {{ number_format(
-                                                    $currentOutstandingAmount,
-                                                    0
-                                                ) }}
-                                            </td>
-                                        </tr>
+                                        <tbody>
+                                            @foreach ($previousUnpaidInvoices as $previousInvoice)
+                                                <tr>
+                                                    <td
+                                                        valign="top"
+                                                        style="
+                                                            padding:12px 6px;
+                                                            border-bottom:1px solid #ead9b4;
+                                                            color:#16213a;
+                                                            font-size:13px;
+                                                            line-height:1.6;
+                                                        "
+                                                    >
+                                                        <strong>
+                                                            {{ $previousInvoice
+                                                                ->getAttribute(
+                                                                    'display_billing_month'
+                                                                ) }}
+                                                        </strong>
 
-                                        <tr>
-                                            <td
-                                                style="
-                                                    padding:16px 10px;
-                                                    background:#f5a900;
-                                                    color:#ffffff;
-                                                    font-size:17px;
-                                                    font-weight:900;
-                                                "
-                                            >
-                                                Grand total outstanding
-                                            </td>
+                                                        <br>
 
-                                            <td
-                                                align="right"
-                                                style="
-                                                    padding:16px 10px;
-                                                    background:#f5a900;
-                                                    color:#ffffff;
-                                                    font-size:17px;
-                                                    font-weight:900;
-                                                "
-                                            >
-                                                {{ $currency }}
-                                                {{ number_format(
-                                                    $grandOutstandingTotal,
-                                                    0
-                                                ) }}
-                                            </td>
-                                        </tr>
+                                                        {{ $previousInvoice->invoice_number
+                                                            ?: 'Invoice #' . $previousInvoice->id }}
+
+                                                        <br>
+
+                                                        <span
+                                                            style="
+                                                                color:#6b7280;
+                                                                font-size:12px;
+                                                            "
+                                                        >
+                                                            Due:
+                                                            {{ $previousInvoice
+                                                                ->getAttribute(
+                                                                    'display_due_date'
+                                                                ) }}
+                                                        </span>
+                                                    </td>
+
+                                                    <td
+                                                        valign="top"
+                                                        style="
+                                                            padding:12px 6px;
+                                                            border-bottom:1px solid #ead9b4;
+                                                            color:#16213a;
+                                                            font-size:13px;
+                                                            line-height:1.6;
+                                                        "
+                                                    >
+                                                        New charge:
+                                                        <strong>
+                                                            {{ $currency }}
+                                                            {{ number_format(
+                                                                (float) $previousInvoice
+                                                                    ->getAttribute(
+                                                                        'display_subtotal'
+                                                                    ),
+                                                                0
+                                                            ) }}
+                                                        </strong>
+
+                                                        <br>
+
+                                                        VAT:
+                                                        <strong>
+                                                            {{ $currency }}
+                                                            {{ number_format(
+                                                                (float) $previousInvoice
+                                                                    ->getAttribute(
+                                                                        'display_vat_amount'
+                                                                    ),
+                                                                0
+                                                            ) }}
+                                                        </strong>
+                                                    </td>
+
+                                                    <td
+                                                        align="right"
+                                                        valign="top"
+                                                        style="
+                                                            padding:12px 6px;
+                                                            border-bottom:1px solid #ead9b4;
+                                                            color:#16213a;
+                                                            font-size:14px;
+                                                            font-weight:800;
+                                                        "
+                                                    >
+                                                        {{ $currency }}
+                                                        {{ number_format(
+                                                            (float) $previousInvoice
+                                                                ->getAttribute(
+                                                                    'display_total_amount'
+                                                                ),
+                                                            0
+                                                        ) }}
+                                                    </td>
+                                                </tr>
+                                            @endforeach
+
+                                            <tr>
+                                                <td
+                                                    colspan="2"
+                                                    style="
+                                                        padding:13px 6px;
+                                                        color:#40506c;
+                                                        font-size:14px;
+                                                        font-weight:800;
+                                                    "
+                                                >
+                                                    Previous unpaid total
+                                                </td>
+
+                                                <td
+                                                    align="right"
+                                                    style="
+                                                        padding:13px 6px;
+                                                        color:#40506c;
+                                                        font-size:14px;
+                                                        font-weight:800;
+                                                    "
+                                                >
+                                                    {{ $currency }}
+                                                    {{ number_format(
+                                                        $previousOutstandingTotal,
+                                                        0
+                                                    ) }}
+                                                </td>
+                                            </tr>
+
+                                            <tr>
+                                                <td
+                                                    colspan="2"
+                                                    style="
+                                                        padding:13px 6px;
+                                                        color:#40506c;
+                                                        font-size:14px;
+                                                        font-weight:800;
+                                                    "
+                                                >
+                                                    Current invoice total
+                                                </td>
+
+                                                <td
+                                                    align="right"
+                                                    style="
+                                                        padding:13px 6px;
+                                                        color:#40506c;
+                                                        font-size:14px;
+                                                        font-weight:800;
+                                                    "
+                                                >
+                                                    {{ $currency }}
+                                                    {{ number_format(
+                                                        $currentOutstandingAmount,
+                                                        0
+                                                    ) }}
+                                                </td>
+                                            </tr>
+
+                                            <tr>
+                                                <td
+                                                    colspan="2"
+                                                    style="
+                                                        padding:15px 10px;
+                                                        background:#f5a900;
+                                                        color:#ffffff;
+                                                        font-size:17px;
+                                                        font-weight:900;
+                                                    "
+                                                >
+                                                    Grand total outstanding
+                                                </td>
+
+                                                <td
+                                                    align="right"
+                                                    style="
+                                                        padding:15px 10px;
+                                                        background:#f5a900;
+                                                        color:#ffffff;
+                                                        font-size:17px;
+                                                        font-weight:900;
+                                                    "
+                                                >
+                                                    {{ $currency }}
+                                                    {{ number_format(
+                                                        $grandOutstandingTotal,
+                                                        0
+                                                    ) }}
+                                                </td>
+                                            </tr>
+                                        </tbody>
                                     </table>
                                 </div>
                             @endif

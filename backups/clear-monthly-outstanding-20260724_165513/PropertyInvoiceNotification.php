@@ -387,126 +387,6 @@ class PropertyInvoiceNotification extends Notification
             $currentOutstandingAmount
             + $previousOutstandingTotal;
 
-        // Complete monthly outstanding rows.
-        $outstandingInvoiceRows =
-            $previousUnpaidInvoices
-                ->map(
-                    function (
-                        Invoice $previousInvoice
-                    ): array {
-                        return [
-                            'period_label' =>
-                                'Previous month',
-
-                            'billing_month' =>
-                                $previousInvoice
-                                    ->getAttribute(
-                                        'display_billing_month'
-                                    ),
-
-                            'invoice_number' =>
-                                $previousInvoice
-                                    ->invoice_number
-                                ?: 'Invoice #'
-                                    . $previousInvoice->id,
-
-                            'invoice_date' =>
-                                optional(
-                                    $previousInvoice
-                                        ->invoice_date
-                                )->format('d M Y')
-                                ?: '—',
-
-                            'due_date' =>
-                                $previousInvoice
-                                    ->getAttribute(
-                                        'display_due_date'
-                                    ),
-
-                            'subtotal' =>
-                                (float)
-                                $previousInvoice
-                                    ->getAttribute(
-                                        'display_subtotal'
-                                    ),
-
-                            'vat_amount' =>
-                                (float)
-                                $previousInvoice
-                                    ->getAttribute(
-                                        'display_vat_amount'
-                                    ),
-
-                            'outstanding' =>
-                                (float)
-                                $previousInvoice
-                                    ->getAttribute(
-                                        'display_total_amount'
-                                    ),
-
-                            'is_current' => false,
-                        ];
-                    }
-                )
-                ->values();
-
-        $currentOutstandingSubtotal =
-            $currentIsLegacyAddedVat
-                ? max(
-                    $resolvedCurrentTotal
-                    - $currentVatAmount,
-                    0
-                )
-                : (float) (
-                    $currentMetadata['subtotal']
-                    ?? max(
-                        $resolvedCurrentTotal
-                        - $currentVatAmount,
-                        0
-                    )
-                );
-
-        if ($currentOutstandingAmount > 0) {
-            $outstandingInvoiceRows->push([
-                'period_label' =>
-                    'Current month',
-
-                'billing_month' =>
-                    optional(
-                        $invoice->invoice_date
-                    )->format('F Y')
-                    ?: '—',
-
-                'invoice_number' =>
-                    $invoice->invoice_number
-                    ?: 'Invoice #'
-                        . $invoice->id,
-
-                'invoice_date' =>
-                    optional(
-                        $invoice->invoice_date
-                    )->format('d M Y')
-                    ?: '—',
-
-                'due_date' =>
-                    optional(
-                        $invoice->due_date
-                    )->format('d M Y')
-                    ?: '—',
-
-                'subtotal' =>
-                    $currentOutstandingSubtotal,
-
-                'vat_amount' =>
-                    $currentVatAmount,
-
-                'outstanding' =>
-                    $currentOutstandingAmount,
-
-                'is_current' => true,
-            ]);
-        }
-
         $daysBeforeDue =
             $this->resolvedDaysBeforeDue();
 
@@ -551,8 +431,6 @@ class PropertyInvoiceNotification extends Notification
                         $currentOutstandingAmount,
                     'grandOutstandingTotal' =>
                         $grandOutstandingTotal,
-                    'outstandingInvoiceRows' =>
-                        $outstandingInvoiceRows,
 
             ]
         )->setPaper(
@@ -589,8 +467,6 @@ class PropertyInvoiceNotification extends Notification
                         $currentOutstandingAmount,
                     'grandOutstandingTotal' =>
                         $grandOutstandingTotal,
-                    'outstandingInvoiceRows' =>
-                        $outstandingInvoiceRows,
 
                     'pdfUrl' => $pdfUrl,
                 ]

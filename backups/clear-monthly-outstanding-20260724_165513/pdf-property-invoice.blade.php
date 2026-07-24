@@ -223,142 +223,6 @@
         )
     );
 
-    // Complete monthly rows for direct previews.
-    $outstandingInvoiceRows = collect(
-        $outstandingInvoiceRows ?? []
-    );
-
-    if ($outstandingInvoiceRows->isEmpty()) {
-        $outstandingInvoiceRows =
-            $previousUnpaidInvoices
-                ->map(
-                    function (
-                        $previousInvoice
-                    ): array {
-                        return [
-                            'period_label' =>
-                                'Previous month',
-
-                            'billing_month' =>
-                                $previousInvoice
-                                    ->getAttribute(
-                                        'display_billing_month'
-                                    ),
-
-                            'invoice_number' =>
-                                $previousInvoice
-                                    ->invoice_number
-                                ?: 'Invoice #'
-                                    . $previousInvoice->id,
-
-                            'invoice_date' =>
-                                optional(
-                                    $previousInvoice
-                                        ->invoice_date
-                                )->format('d M Y')
-                                ?: '—',
-
-                            'due_date' =>
-                                $previousInvoice
-                                    ->getAttribute(
-                                        'display_due_date'
-                                    ),
-
-                            'subtotal' =>
-                                (float)
-                                $previousInvoice
-                                    ->getAttribute(
-                                        'display_subtotal'
-                                    ),
-
-                            'vat_amount' =>
-                                (float)
-                                $previousInvoice
-                                    ->getAttribute(
-                                        'display_vat_amount'
-                                    ),
-
-                            'outstanding' =>
-                                (float)
-                                $previousInvoice
-                                    ->getAttribute(
-                                        'display_total_amount'
-                                    ),
-
-                            'is_current' => false,
-                        ];
-                    }
-                )
-                ->values();
-
-        $currentOutstandingVat = (float) (
-            $currentInvoiceMetadata[
-                'vat_amount'
-            ]
-            ?? $currentInvoiceMetadata['vat']
-            ?? 0
-        );
-
-        $currentOutstandingSubtotal =
-            $currentIsLegacyAddedVat
-                ? max(
-                    $resolvedCurrentTotal
-                    - $currentOutstandingVat,
-                    0
-                )
-                : (float) (
-                    $currentInvoiceMetadata[
-                        'subtotal'
-                    ]
-                    ?? max(
-                        $resolvedCurrentTotal
-                        - $currentOutstandingVat,
-                        0
-                    )
-                );
-
-        if ($currentOutstandingAmount > 0) {
-            $outstandingInvoiceRows->push([
-                'period_label' =>
-                    'Current month',
-
-                'billing_month' =>
-                    optional(
-                        $invoice->invoice_date
-                    )->format('F Y')
-                    ?: '—',
-
-                'invoice_number' =>
-                    $invoice->invoice_number
-                    ?: 'Invoice #'
-                        . $invoice->id,
-
-                'invoice_date' =>
-                    optional(
-                        $invoice->invoice_date
-                    )->format('d M Y')
-                    ?: '—',
-
-                'due_date' =>
-                    optional(
-                        $invoice->due_date
-                    )->format('d M Y')
-                    ?: '—',
-
-                'subtotal' =>
-                    $currentOutstandingSubtotal,
-
-                'vat_amount' =>
-                    $currentOutstandingVat,
-
-                'outstanding' =>
-                    $currentOutstandingAmount,
-
-                'is_current' => true,
-            ]);
-        }
-    }
-
     $propertyName = $invoice->property_name
         ?: optional($property)->title
         ?: 'Property';
@@ -994,160 +858,129 @@
     </table>
 
 
-    @if ($outstandingInvoiceRows->isNotEmpty())
-        <!-- Clear monthly outstanding invoices PDF -->
+    @if ($previousUnpaidInvoices->isNotEmpty())
+        <!-- Previous unpaid invoices PDF -->
         <div
             class="section-title"
             style="margin-top:28px;"
         >
-            Outstanding invoice history
+            Previous unpaid invoices
         </div>
 
         <div
             style="
                 margin-top:6px;
-                margin-bottom:10px;
                 font-size:9px;
-                line-height:1.5;
                 color:#6b7280;
             "
         >
-            Each unpaid billing month is shown separately
-            with its invoice date, payment due date,
-            VAT breakdown and outstanding balance.
+            These invoices are from previous billing
+            months and remain unpaid.
         </div>
-
-        @foreach ($outstandingInvoiceRows as $row)
-            <div
-                style="
-                    margin-top:10px;
-                    page-break-inside:avoid;
-                "
-            >
-                <div
-                    class="box-title"
-                    style="
-                        border-left:4px solid {{ $row['is_current']
-                            ? '#F9A800'
-                            : '#9CA3AF' }};
-                    "
-                >
-                    {{ strtoupper(
-                        $row['period_label']
-                    ) }}
-                    —
-                    {{ $row['billing_month'] }}
-                </div>
-
-                <table
-                    class="line-table"
-                    width="100%"
-                >
-                    <tbody>
-                        <tr>
-                            <td width="24%">
-                                Invoice number
-                            </td>
-
-                            <td width="26%">
-                                <strong>
-                                    {{ $row['invoice_number'] }}
-                                </strong>
-                            </td>
-
-                            <td width="22%">
-                                Outstanding
-                            </td>
-
-                            <td
-                                width="28%"
-                                class="right"
-                            >
-                                <strong>
-                                    {{ $currency }}
-                                    {{ number_format(
-                                        $row['outstanding'],
-                                        0
-                                    ) }}
-                                </strong>
-                            </td>
-                        </tr>
-
-                        <tr>
-                            <td>Invoice date</td>
-
-                            <td>
-                                {{ $row['invoice_date'] }}
-                            </td>
-
-                            <td>Payment due date</td>
-
-                            <td class="right">
-                                {{ $row['due_date'] }}
-                            </td>
-                        </tr>
-
-                        <tr>
-                            <td>New charge</td>
-
-                            <td>
-                                {{ $currency }}
-                                {{ number_format(
-                                    $row['subtotal'],
-                                    0
-                                ) }}
-                            </td>
-
-                            <td>VAT included</td>
-
-                            <td class="right">
-                                {{ $currency }}
-                                {{ number_format(
-                                    $row['vat_amount'],
-                                    0
-                                ) }}
-                            </td>
-                        </tr>
-
-                        <tr>
-                            <td
-                                colspan="3"
-                                class="right"
-                                style="font-weight:800;"
-                            >
-                                {{ $row['billing_month'] }}
-                                outstanding:
-                            </td>
-
-                            <td
-                                class="right"
-                                style="font-weight:800;"
-                            >
-                                {{ $currency }}
-                                {{ number_format(
-                                    $row['outstanding'],
-                                    0
-                                ) }}
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        @endforeach
 
         <table
             class="line-table"
             width="100%"
-            style="margin-top:12px;"
+            style="margin-top:8px;"
         >
-            <tbody>
+            <thead>
                 <tr>
-                    <td width="70%" class="right">
-                        Previous months outstanding:
+                    <th width="39%">
+                        Billing month / invoice
+                    </th>
+
+                    <th width="33%">
+                        Breakdown
+                    </th>
+
+                    <th
+                        width="28%"
+                        class="right"
+                    >
+                        Outstanding
+                    </th>
+                </tr>
+            </thead>
+
+            <tbody>
+                @foreach ($previousUnpaidInvoices as $previousInvoice)
+                    <tr>
+                        <td>
+                            <strong>
+                                {{ $previousInvoice
+                                    ->getAttribute(
+                                        'display_billing_month'
+                                    ) }}
+                            </strong>
+
+                            <br>
+
+                            {{ $previousInvoice->invoice_number
+                                ?: 'Invoice #' . $previousInvoice->id }}
+
+                            <br>
+
+                            <span
+                                style="
+                                    color:#6b7280;
+                                    font-size:8px;
+                                "
+                            >
+                                Due:
+                                {{ $previousInvoice
+                                    ->getAttribute(
+                                        'display_due_date'
+                                    ) }}
+                            </span>
+                        </td>
+
+                        <td>
+                            New charge:
+                            {{ $currency }}
+                            {{ number_format(
+                                (float) $previousInvoice
+                                    ->getAttribute(
+                                        'display_subtotal'
+                                    ),
+                                0
+                            ) }}
+
+                            <br>
+
+                            VAT:
+                            {{ $currency }}
+                            {{ number_format(
+                                (float) $previousInvoice
+                                    ->getAttribute(
+                                        'display_vat_amount'
+                                    ),
+                                0
+                            ) }}
+                        </td>
+
+                        <td class="right">
+                            {{ $currency }}
+                            {{ number_format(
+                                (float) $previousInvoice
+                                    ->getAttribute(
+                                        'display_total_amount'
+                                    ),
+                                0
+                            ) }}
+                        </td>
+                    </tr>
+                @endforeach
+
+                <tr>
+                    <td
+                        colspan="2"
+                        class="right"
+                        style="font-weight:800;"
+                    >
+                        Previous unpaid total:
                     </td>
 
                     <td
-                        width="30%"
                         class="right"
                         style="font-weight:800;"
                     >
@@ -1160,8 +993,12 @@
                 </tr>
 
                 <tr>
-                    <td class="right">
-                        Current month outstanding:
+                    <td
+                        colspan="2"
+                        class="right"
+                        style="font-weight:800;"
+                    >
+                        Current invoice total:
                     </td>
 
                     <td
@@ -1178,12 +1015,13 @@
 
                 <tr>
                     <td
+                        colspan="2"
                         class="right"
                         style="
-                            padding:9px;
                             background:#F9A800;
                             color:#ffffff;
                             font-weight:800;
+                            padding:9px;
                         "
                     >
                         Grand total outstanding:
@@ -1192,10 +1030,10 @@
                     <td
                         class="right"
                         style="
-                            padding:9px;
                             background:#F9A800;
                             color:#ffffff;
                             font-weight:800;
+                            padding:9px;
                         "
                     >
                         {{ $currency }}
