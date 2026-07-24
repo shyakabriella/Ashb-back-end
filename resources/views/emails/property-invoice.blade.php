@@ -1,4 +1,30 @@
 @php
+    $previousUnpaidInvoices = collect(
+        $previousUnpaidInvoices ?? []
+    );
+
+    $previousOutstandingTotal = (float) (
+        $previousOutstandingTotal
+        ?? $previousUnpaidInvoices->sum(
+            fn ($previousInvoice) =>
+                (float) $previousInvoice->amount
+        )
+    );
+
+    $currentOutstandingAmount = (float) (
+        $currentOutstandingAmount
+        ?? $invoice->amount
+        ?? 0
+    );
+
+    $grandOutstandingTotal = (float) (
+        $grandOutstandingTotal
+        ?? (
+            $currentOutstandingAmount
+            + $previousOutstandingTotal
+        )
+    );
+
     $isReminder =
         ($mode ?? 'invoice') === 'reminder';
 
@@ -423,7 +449,195 @@
                                 </tr>
                             </table>
 
-                            <!-- PDF notice -->
+
+                            @if ($previousUnpaidInvoices->isNotEmpty())
+                                <!-- Previous unpaid invoices -->
+                                <div
+                                    style="
+                                        margin-top:34px;
+                                        padding:22px;
+                                        background:#fffaf0;
+                                        border:1px solid #f5d18a;
+                                        border-radius:12px;
+                                    "
+                                >
+                                    <h2
+                                        style="
+                                            margin:0 0 18px;
+                                            color:#071126;
+                                            font-size:22px;
+                                            line-height:1.3;
+                                            font-weight:800;
+                                        "
+                                    >
+                                        Previous unpaid invoices
+                                    </h2>
+
+                                    <table
+                                        role="presentation"
+                                        width="100%"
+                                        cellpadding="0"
+                                        cellspacing="0"
+                                        border="0"
+                                        style="
+                                            width:100%;
+                                            border-collapse:collapse;
+                                        "
+                                    >
+                                        <thead>
+                                            <tr>
+                                                <th
+                                                    align="left"
+                                                    style="
+                                                        padding:10px 6px;
+                                                        border-bottom:1px solid #d7b76f;
+                                                        color:#40506c;
+                                                        font-size:13px;
+                                                    "
+                                                >
+                                                    Invoice
+                                                </th>
+
+                                                <th
+                                                    align="left"
+                                                    style="
+                                                        padding:10px 6px;
+                                                        border-bottom:1px solid #d7b76f;
+                                                        color:#40506c;
+                                                        font-size:13px;
+                                                    "
+                                                >
+                                                    Due date
+                                                </th>
+
+                                                <th
+                                                    align="right"
+                                                    style="
+                                                        padding:10px 6px;
+                                                        border-bottom:1px solid #d7b76f;
+                                                        color:#40506c;
+                                                        font-size:13px;
+                                                    "
+                                                >
+                                                    Outstanding
+                                                </th>
+                                            </tr>
+                                        </thead>
+
+                                        <tbody>
+                                            @foreach ($previousUnpaidInvoices as $previousInvoice)
+                                                <tr>
+                                                    <td
+                                                        style="
+                                                            padding:12px 6px;
+                                                            border-bottom:1px solid #ead9b4;
+                                                            color:#16213a;
+                                                            font-size:14px;
+                                                        "
+                                                    >
+                                                        {{ $previousInvoice->invoice_number
+                                                            ?: 'Invoice #' . $previousInvoice->id }}
+                                                    </td>
+
+                                                    <td
+                                                        style="
+                                                            padding:12px 6px;
+                                                            border-bottom:1px solid #ead9b4;
+                                                            color:#16213a;
+                                                            font-size:14px;
+                                                        "
+                                                    >
+                                                        {{ optional(
+                                                            $previousInvoice->due_date
+                                                        )->format('d M Y') ?: '—' }}
+                                                    </td>
+
+                                                    <td
+                                                        align="right"
+                                                        style="
+                                                            padding:12px 6px;
+                                                            border-bottom:1px solid #ead9b4;
+                                                            color:#16213a;
+                                                            font-size:14px;
+                                                            font-weight:800;
+                                                        "
+                                                    >
+                                                        {{ $currency }}
+                                                        {{ number_format(
+                                                            (float) $previousInvoice->amount,
+                                                            0
+                                                        ) }}
+                                                    </td>
+                                                </tr>
+                                            @endforeach
+
+                                            <tr>
+                                                <td
+                                                    colspan="2"
+                                                    style="
+                                                        padding:14px 6px;
+                                                        color:#40506c;
+                                                        font-size:15px;
+                                                        font-weight:800;
+                                                    "
+                                                >
+                                                    Previous unpaid total
+                                                </td>
+
+                                                <td
+                                                    align="right"
+                                                    style="
+                                                        padding:14px 6px;
+                                                        color:#40506c;
+                                                        font-size:15px;
+                                                        font-weight:800;
+                                                    "
+                                                >
+                                                    {{ $currency }}
+                                                    {{ number_format(
+                                                        $previousOutstandingTotal,
+                                                        0
+                                                    ) }}
+                                                </td>
+                                            </tr>
+
+                                            <tr>
+                                                <td
+                                                    colspan="2"
+                                                    style="
+                                                        padding:15px 10px;
+                                                        background:#f5a900;
+                                                        color:#ffffff;
+                                                        font-size:17px;
+                                                        font-weight:900;
+                                                    "
+                                                >
+                                                    Grand total outstanding
+                                                </td>
+
+                                                <td
+                                                    align="right"
+                                                    style="
+                                                        padding:15px 10px;
+                                                        background:#f5a900;
+                                                        color:#ffffff;
+                                                        font-size:17px;
+                                                        font-weight:900;
+                                                    "
+                                                >
+                                                    {{ $currency }}
+                                                    {{ number_format(
+                                                        $grandOutstandingTotal,
+                                                        0
+                                                    ) }}
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            @endif
+
+<!-- PDF notice -->
                             <div
                                 style="
                                     margin-top:30px;

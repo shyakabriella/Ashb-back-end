@@ -1,4 +1,30 @@
 @php
+    $previousUnpaidInvoices = collect(
+        $previousUnpaidInvoices ?? []
+    );
+
+    $previousOutstandingTotal = (float) (
+        $previousOutstandingTotal
+        ?? $previousUnpaidInvoices->sum(
+            fn ($previousInvoice) =>
+                (float) $previousInvoice->amount
+        )
+    );
+
+    $currentOutstandingAmount = (float) (
+        $currentOutstandingAmount
+        ?? $invoice->amount
+        ?? 0
+    );
+
+    $grandOutstandingTotal = (float) (
+        $grandOutstandingTotal
+        ?? (
+            $currentOutstandingAmount
+            + $previousOutstandingTotal
+        )
+    );
+
     $propertyName = $invoice->property_name
         ?: optional($property)->title
         ?: 'Property';
@@ -633,7 +659,111 @@
         </tr>
     </table>
 
-    <div
+
+    @if ($previousUnpaidInvoices->isNotEmpty())
+        <!-- Previous unpaid invoices PDF -->
+        <div
+            class="section-title"
+            style="margin-top:28px;"
+        >
+            Previous unpaid invoices
+        </div>
+
+        <table
+            class="line-table"
+            width="100%"
+            style="margin-top:8px;"
+        >
+            <thead>
+                <tr>
+                    <th width="45%">Invoice</th>
+                    <th width="25%">Due date</th>
+                    <th width="30%" class="right">
+                        Outstanding
+                    </th>
+                </tr>
+            </thead>
+
+            <tbody>
+                @foreach ($previousUnpaidInvoices as $previousInvoice)
+                    <tr>
+                        <td>
+                            {{ $previousInvoice->invoice_number
+                                ?: 'Invoice #' . $previousInvoice->id }}
+                        </td>
+
+                        <td>
+                            {{ optional(
+                                $previousInvoice->due_date
+                            )->format('d M Y') ?: '—' }}
+                        </td>
+
+                        <td class="right">
+                            {{ $currency }}
+                            {{ number_format(
+                                (float) $previousInvoice->amount,
+                                0
+                            ) }}
+                        </td>
+                    </tr>
+                @endforeach
+
+                <tr>
+                    <td
+                        colspan="2"
+                        class="right"
+                        style="font-weight:800;"
+                    >
+                        Previous unpaid total:
+                    </td>
+
+                    <td
+                        class="right"
+                        style="font-weight:800;"
+                    >
+                        {{ $currency }}
+                        {{ number_format(
+                            $previousOutstandingTotal,
+                            0
+                        ) }}
+                    </td>
+                </tr>
+
+                <tr>
+                    <td
+                        colspan="2"
+                        class="right"
+                        style="
+                            background:#F9A800;
+                            color:#ffffff;
+                            font-weight:800;
+                            padding:9px;
+                        "
+                    >
+                        Grand total outstanding:
+                    </td>
+
+                    <td
+                        class="right"
+                        style="
+                            background:#F9A800;
+                            color:#ffffff;
+                            font-weight:800;
+                            padding:9px;
+                        "
+                    >
+                        {{ $currency }}
+                        {{ number_format(
+                            $grandOutstandingTotal,
+                            0
+                        ) }}
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    @endif
+
+<div
         class="section-title"
         style="margin-top:30px;"
     >

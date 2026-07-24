@@ -97,6 +97,86 @@ class PropertyInvoiceNotification extends Notification
             ],
             true
         );
+
+        // Previous unpaid invoices shown in the email and PDF.
+        $outstandingStatuses = [
+            Invoice::PAYMENT_STATUS_UNPAID,
+            Invoice::PAYMENT_STATUS_OVERDUE,
+        ];
+
+        $previousUnpaidInvoices = Invoice::query()
+            ->where(
+                'id',
+                '<>',
+                $invoice->id
+            )
+            ->where(
+                'invoice_status',
+                Invoice::INVOICE_STATUS_ISSUED
+            )
+            ->whereIn(
+                'payment_status',
+                $outstandingStatuses
+            )
+            ->where(function ($query) use (
+                $invoice,
+                $propertyName
+            ) {
+                if ($invoice->property_id) {
+                    $query
+                        ->where(
+                            'property_id',
+                            $invoice->property_id
+                        )
+                        ->orWhere(function (
+                            $nameQuery
+                        ) use ($propertyName) {
+                            $nameQuery
+                                ->whereNull('property_id')
+                                ->whereRaw(
+                                    'LOWER(TRIM(property_name)) = ?',
+                                    [
+                                        strtolower(
+                                            trim($propertyName)
+                                        ),
+                                    ]
+                                );
+                        });
+
+                    return;
+                }
+
+                $query->whereRaw(
+                    'LOWER(TRIM(property_name)) = ?',
+                    [
+                        strtolower(
+                            trim($propertyName)
+                        ),
+                    ]
+                );
+            })
+            ->orderBy('invoice_date')
+            ->orderBy('id')
+            ->get();
+
+        $previousOutstandingTotal = (float)
+            $previousUnpaidInvoices->sum(
+                fn (Invoice $previousInvoice) =>
+                    (float) $previousInvoice->amount
+            );
+
+        $currentOutstandingAmount = in_array(
+            $paymentStatus,
+            $outstandingStatuses,
+            true
+        )
+            ? (float) $invoice->amount
+            : 0.0;
+
+        $grandOutstandingTotal =
+            $currentOutstandingAmount
+            + $previousOutstandingTotal;
+
         $daysBeforeDue =
             $this->resolvedDaysBeforeDue();
 
@@ -133,6 +213,15 @@ class PropertyInvoiceNotification extends Notification
                 'invoice' => $invoice,
                 'property' => $property,
                 'paymentUrl' => $paymentUrl,
+                    'previousUnpaidInvoices' =>
+                        $previousUnpaidInvoices,
+                    'previousOutstandingTotal' =>
+                        $previousOutstandingTotal,
+                    'currentOutstandingAmount' =>
+                        $currentOutstandingAmount,
+                    'grandOutstandingTotal' =>
+                        $grandOutstandingTotal,
+
             ]
         )->setPaper(
             'a4',
@@ -160,6 +249,15 @@ class PropertyInvoiceNotification extends Notification
                         $this
                             ->resolvedDaysBeforeDue(),
                     'paymentUrl' => $paymentUrl,
+                    'previousUnpaidInvoices' =>
+                        $previousUnpaidInvoices,
+                    'previousOutstandingTotal' =>
+                        $previousOutstandingTotal,
+                    'currentOutstandingAmount' =>
+                        $currentOutstandingAmount,
+                    'grandOutstandingTotal' =>
+                        $grandOutstandingTotal,
+
                     'pdfUrl' => $pdfUrl,
                 ]
             )
