@@ -3,216 +3,18 @@
         $previousUnpaidInvoices ?? []
     );
 
-    $currentMonthStart = optional(
-        $invoice->invoice_date
-    )
-        ? optional(
-            $invoice->invoice_date
-        )->copy()->startOfMonth()
-        : null;
-
-    /*
-     * Keep only earlier months and select the latest
-     * invoice from every billing month.
-     */
-    $previousUnpaidInvoices =
-        $previousUnpaidInvoices
-            ->filter(
-                function (
-                    $previousInvoice
-                ) use ($currentMonthStart): bool {
-                    if (!$currentMonthStart) {
-                        return true;
-                    }
-
-                    if (
-                        !$previousInvoice->invoice_date
-                    ) {
-                        return false;
-                    }
-
-                    return $previousInvoice
-                        ->invoice_date
-                        ->copy()
-                        ->startOfMonth()
-                        ->lt($currentMonthStart);
-                }
-            )
-            ->groupBy(
-                function (
-                    $previousInvoice
-                ): string {
-                    return optional(
-                        $previousInvoice->invoice_date
-                    )->format('Y-m')
-                        ?: 'invoice-'
-                            . $previousInvoice->id;
-                }
-            )
-            ->map(
-                fn ($monthlyInvoices) =>
-                    $monthlyInvoices
-                        ->sortByDesc('id')
-                        ->first()
-            )
-            ->filter()
-            ->sortBy(
-                fn ($previousInvoice) =>
-                    optional(
-                        $previousInvoice->invoice_date
-                    )->format('Y-m-d')
-                        ?: ''
-            )
-            ->values();
-
-    $prepareOutstandingInvoice =
-        static function (
-            $previousInvoice
-        ): void {
-            $metadata = is_array(
-                $previousInvoice->metadata
-            )
-                ? $previousInvoice->metadata
-                : [];
-
-            $vatAmount = (float) (
-                $metadata['vat_amount']
-                ?? $metadata['vat']
-                ?? 0
-            );
-
-            $amountIncludesVat = filter_var(
-                $metadata[
-                    'amount_includes_vat'
-                ] ?? false,
-                FILTER_VALIDATE_BOOLEAN
-            );
-
-            $vatCalculation = (string) (
-                $metadata[
-                    'vat_calculation'
-                ] ?? ''
-            );
-
-            $isLegacyAddedVat =
-                $amountIncludesVat
-                && $vatCalculation !==
-                    'deducted_from_invoice_amount'
-                && array_key_exists(
-                    'subtotal',
-                    $metadata
-                );
-
-            if ($isLegacyAddedVat) {
-                $totalAmount = (float)
-                    $metadata['subtotal'];
-
-                $subtotal = max(
-                    $totalAmount - $vatAmount,
-                    0
-                );
-            } else {
-                $totalAmount = (float) (
-                    $metadata['total_amount']
-                    ?? $previousInvoice->amount
-                    ?? 0
-                );
-
-                $subtotal = (float) (
-                    $metadata['subtotal']
-                    ?? max(
-                        $totalAmount - $vatAmount,
-                        0
-                    )
-                );
-            }
-
-            $previousInvoice->setAttribute(
-                'display_subtotal',
-                $subtotal
-            );
-
-            $previousInvoice->setAttribute(
-                'display_vat_amount',
-                $vatAmount
-            );
-
-            $previousInvoice->setAttribute(
-                'display_total_amount',
-                $totalAmount
-            );
-
-            $previousInvoice->setAttribute(
-                'display_billing_month',
-                optional(
-                    $previousInvoice->invoice_date
-                )->format('F Y') ?: '—'
-            );
-
-            $previousInvoice->setAttribute(
-                'display_due_date',
-                optional(
-                    $previousInvoice->due_date
-                )->format('d M Y') ?: '—'
-            );
-        };
-
-    $previousUnpaidInvoices->each(
-        $prepareOutstandingInvoice
-    );
-
-    $previousOutstandingTotal = (float)
-        $previousUnpaidInvoices->sum(
+    $previousOutstandingTotal = (float) (
+        $previousOutstandingTotal
+        ?? $previousUnpaidInvoices->sum(
             fn ($previousInvoice) =>
-                (float) $previousInvoice
-                    ->getAttribute(
-                        'display_total_amount'
-                    )
-        );
-
-    $currentInvoiceMetadata = is_array(
-        $invoice->metadata
-    )
-        ? $invoice->metadata
-        : [];
-
-    $currentIncludesVat = filter_var(
-        $currentInvoiceMetadata[
-            'amount_includes_vat'
-        ] ?? false,
-        FILTER_VALIDATE_BOOLEAN
+                (float) $previousInvoice->amount
+        )
     );
-
-    $currentVatCalculation = (string) (
-        $currentInvoiceMetadata[
-            'vat_calculation'
-        ] ?? ''
-    );
-
-    $currentIsLegacyAddedVat =
-        $currentIncludesVat
-        && $currentVatCalculation !==
-            'deducted_from_invoice_amount'
-        && array_key_exists(
-            'subtotal',
-            $currentInvoiceMetadata
-        );
-
-    $resolvedCurrentTotal =
-        $currentIsLegacyAddedVat
-            ? (float)
-                $currentInvoiceMetadata['subtotal']
-            : (float) (
-                $currentInvoiceMetadata[
-                    'total_amount'
-                ]
-                ?? $invoice->amount
-                ?? 0
-            );
 
     $currentOutstandingAmount = (float) (
         $currentOutstandingAmount
-        ?? $resolvedCurrentTotal
+        ?? $invoice->amount
+        ?? 0
     );
 
     $grandOutstandingTotal = (float) (
@@ -661,7 +463,7 @@
                                 >
                                     <h2
                                         style="
-                                            margin:0 0 8px;
+                                            margin:0 0 18px;
                                             color:#071126;
                                             font-size:22px;
                                             line-height:1.3;
@@ -670,18 +472,6 @@
                                     >
                                         Previous unpaid invoices
                                     </h2>
-
-                                    <p
-                                        style="
-                                            margin:0 0 18px;
-                                            color:#40506c;
-                                            font-size:14px;
-                                            line-height:1.6;
-                                        "
-                                    >
-                                        The invoices below are from previous
-                                        billing months and remain unpaid.
-                                    </p>
 
                                     <table
                                         role="presentation"
@@ -698,7 +488,6 @@
                                             <tr>
                                                 <th
                                                     align="left"
-                                                    width="39%"
                                                     style="
                                                         padding:10px 6px;
                                                         border-bottom:1px solid #d7b76f;
@@ -706,12 +495,11 @@
                                                         font-size:13px;
                                                     "
                                                 >
-                                                    Billing month / invoice
+                                                    Invoice
                                                 </th>
 
                                                 <th
                                                     align="left"
-                                                    width="33%"
                                                     style="
                                                         padding:10px 6px;
                                                         border-bottom:1px solid #d7b76f;
@@ -719,12 +507,11 @@
                                                         font-size:13px;
                                                     "
                                                 >
-                                                    Breakdown
+                                                    Due date
                                                 </th>
 
                                                 <th
                                                     align="right"
-                                                    width="28%"
                                                     style="
                                                         padding:10px 6px;
                                                         border-bottom:1px solid #d7b76f;
@@ -741,83 +528,32 @@
                                             @foreach ($previousUnpaidInvoices as $previousInvoice)
                                                 <tr>
                                                     <td
-                                                        valign="top"
                                                         style="
                                                             padding:12px 6px;
                                                             border-bottom:1px solid #ead9b4;
                                                             color:#16213a;
-                                                            font-size:13px;
-                                                            line-height:1.6;
+                                                            font-size:14px;
                                                         "
                                                     >
-                                                        <strong>
-                                                            {{ $previousInvoice
-                                                                ->getAttribute(
-                                                                    'display_billing_month'
-                                                                ) }}
-                                                        </strong>
-
-                                                        <br>
-
                                                         {{ $previousInvoice->invoice_number
                                                             ?: 'Invoice #' . $previousInvoice->id }}
-
-                                                        <br>
-
-                                                        <span
-                                                            style="
-                                                                color:#6b7280;
-                                                                font-size:12px;
-                                                            "
-                                                        >
-                                                            Due:
-                                                            {{ $previousInvoice
-                                                                ->getAttribute(
-                                                                    'display_due_date'
-                                                                ) }}
-                                                        </span>
                                                     </td>
 
                                                     <td
-                                                        valign="top"
                                                         style="
                                                             padding:12px 6px;
                                                             border-bottom:1px solid #ead9b4;
                                                             color:#16213a;
-                                                            font-size:13px;
-                                                            line-height:1.6;
+                                                            font-size:14px;
                                                         "
                                                     >
-                                                        New charge:
-                                                        <strong>
-                                                            {{ $currency }}
-                                                            {{ number_format(
-                                                                (float) $previousInvoice
-                                                                    ->getAttribute(
-                                                                        'display_subtotal'
-                                                                    ),
-                                                                0
-                                                            ) }}
-                                                        </strong>
-
-                                                        <br>
-
-                                                        VAT:
-                                                        <strong>
-                                                            {{ $currency }}
-                                                            {{ number_format(
-                                                                (float) $previousInvoice
-                                                                    ->getAttribute(
-                                                                        'display_vat_amount'
-                                                                    ),
-                                                                0
-                                                            ) }}
-                                                        </strong>
+                                                        {{ optional(
+                                                            $previousInvoice->due_date
+                                                        )->format('d M Y') ?: '—' }}
                                                     </td>
 
                                                     <td
                                                         align="right"
-                                                        valign="top"
                                                         style="
                                                             padding:12px 6px;
                                                             border-bottom:1px solid #ead9b4;
@@ -828,10 +564,7 @@
                                                     >
                                                         {{ $currency }}
                                                         {{ number_format(
-                                                            (float) $previousInvoice
-                                                                ->getAttribute(
-                                                                    'display_total_amount'
-                                                                ),
+                                                            (float) $previousInvoice->amount,
                                                             0
                                                         ) }}
                                                     </td>
@@ -842,9 +575,9 @@
                                                 <td
                                                     colspan="2"
                                                     style="
-                                                        padding:13px 6px;
+                                                        padding:14px 6px;
                                                         color:#40506c;
-                                                        font-size:14px;
+                                                        font-size:15px;
                                                         font-weight:800;
                                                     "
                                                 >
@@ -854,45 +587,15 @@
                                                 <td
                                                     align="right"
                                                     style="
-                                                        padding:13px 6px;
+                                                        padding:14px 6px;
                                                         color:#40506c;
-                                                        font-size:14px;
+                                                        font-size:15px;
                                                         font-weight:800;
                                                     "
                                                 >
                                                     {{ $currency }}
                                                     {{ number_format(
                                                         $previousOutstandingTotal,
-                                                        0
-                                                    ) }}
-                                                </td>
-                                            </tr>
-
-                                            <tr>
-                                                <td
-                                                    colspan="2"
-                                                    style="
-                                                        padding:13px 6px;
-                                                        color:#40506c;
-                                                        font-size:14px;
-                                                        font-weight:800;
-                                                    "
-                                                >
-                                                    Current invoice total
-                                                </td>
-
-                                                <td
-                                                    align="right"
-                                                    style="
-                                                        padding:13px 6px;
-                                                        color:#40506c;
-                                                        font-size:14px;
-                                                        font-weight:800;
-                                                    "
-                                                >
-                                                    {{ $currency }}
-                                                    {{ number_format(
-                                                        $currentOutstandingAmount,
                                                         0
                                                     ) }}
                                                 </td>
@@ -934,7 +637,7 @@
                                 </div>
                             @endif
 
-                            <!-- PDF notice -->
+<!-- PDF notice -->
                             <div
                                 style="
                                     margin-top:30px;

@@ -3,216 +3,18 @@
         $previousUnpaidInvoices ?? []
     );
 
-    $currentMonthStart = optional(
-        $invoice->invoice_date
-    )
-        ? optional(
-            $invoice->invoice_date
-        )->copy()->startOfMonth()
-        : null;
-
-    /*
-     * Keep only earlier months and select the latest
-     * invoice from every billing month.
-     */
-    $previousUnpaidInvoices =
-        $previousUnpaidInvoices
-            ->filter(
-                function (
-                    $previousInvoice
-                ) use ($currentMonthStart): bool {
-                    if (!$currentMonthStart) {
-                        return true;
-                    }
-
-                    if (
-                        !$previousInvoice->invoice_date
-                    ) {
-                        return false;
-                    }
-
-                    return $previousInvoice
-                        ->invoice_date
-                        ->copy()
-                        ->startOfMonth()
-                        ->lt($currentMonthStart);
-                }
-            )
-            ->groupBy(
-                function (
-                    $previousInvoice
-                ): string {
-                    return optional(
-                        $previousInvoice->invoice_date
-                    )->format('Y-m')
-                        ?: 'invoice-'
-                            . $previousInvoice->id;
-                }
-            )
-            ->map(
-                fn ($monthlyInvoices) =>
-                    $monthlyInvoices
-                        ->sortByDesc('id')
-                        ->first()
-            )
-            ->filter()
-            ->sortBy(
-                fn ($previousInvoice) =>
-                    optional(
-                        $previousInvoice->invoice_date
-                    )->format('Y-m-d')
-                        ?: ''
-            )
-            ->values();
-
-    $prepareOutstandingInvoice =
-        static function (
-            $previousInvoice
-        ): void {
-            $metadata = is_array(
-                $previousInvoice->metadata
-            )
-                ? $previousInvoice->metadata
-                : [];
-
-            $vatAmount = (float) (
-                $metadata['vat_amount']
-                ?? $metadata['vat']
-                ?? 0
-            );
-
-            $amountIncludesVat = filter_var(
-                $metadata[
-                    'amount_includes_vat'
-                ] ?? false,
-                FILTER_VALIDATE_BOOLEAN
-            );
-
-            $vatCalculation = (string) (
-                $metadata[
-                    'vat_calculation'
-                ] ?? ''
-            );
-
-            $isLegacyAddedVat =
-                $amountIncludesVat
-                && $vatCalculation !==
-                    'deducted_from_invoice_amount'
-                && array_key_exists(
-                    'subtotal',
-                    $metadata
-                );
-
-            if ($isLegacyAddedVat) {
-                $totalAmount = (float)
-                    $metadata['subtotal'];
-
-                $subtotal = max(
-                    $totalAmount - $vatAmount,
-                    0
-                );
-            } else {
-                $totalAmount = (float) (
-                    $metadata['total_amount']
-                    ?? $previousInvoice->amount
-                    ?? 0
-                );
-
-                $subtotal = (float) (
-                    $metadata['subtotal']
-                    ?? max(
-                        $totalAmount - $vatAmount,
-                        0
-                    )
-                );
-            }
-
-            $previousInvoice->setAttribute(
-                'display_subtotal',
-                $subtotal
-            );
-
-            $previousInvoice->setAttribute(
-                'display_vat_amount',
-                $vatAmount
-            );
-
-            $previousInvoice->setAttribute(
-                'display_total_amount',
-                $totalAmount
-            );
-
-            $previousInvoice->setAttribute(
-                'display_billing_month',
-                optional(
-                    $previousInvoice->invoice_date
-                )->format('F Y') ?: '—'
-            );
-
-            $previousInvoice->setAttribute(
-                'display_due_date',
-                optional(
-                    $previousInvoice->due_date
-                )->format('d M Y') ?: '—'
-            );
-        };
-
-    $previousUnpaidInvoices->each(
-        $prepareOutstandingInvoice
-    );
-
-    $previousOutstandingTotal = (float)
-        $previousUnpaidInvoices->sum(
+    $previousOutstandingTotal = (float) (
+        $previousOutstandingTotal
+        ?? $previousUnpaidInvoices->sum(
             fn ($previousInvoice) =>
-                (float) $previousInvoice
-                    ->getAttribute(
-                        'display_total_amount'
-                    )
-        );
-
-    $currentInvoiceMetadata = is_array(
-        $invoice->metadata
-    )
-        ? $invoice->metadata
-        : [];
-
-    $currentIncludesVat = filter_var(
-        $currentInvoiceMetadata[
-            'amount_includes_vat'
-        ] ?? false,
-        FILTER_VALIDATE_BOOLEAN
+                (float) $previousInvoice->amount
+        )
     );
-
-    $currentVatCalculation = (string) (
-        $currentInvoiceMetadata[
-            'vat_calculation'
-        ] ?? ''
-    );
-
-    $currentIsLegacyAddedVat =
-        $currentIncludesVat
-        && $currentVatCalculation !==
-            'deducted_from_invoice_amount'
-        && array_key_exists(
-            'subtotal',
-            $currentInvoiceMetadata
-        );
-
-    $resolvedCurrentTotal =
-        $currentIsLegacyAddedVat
-            ? (float)
-                $currentInvoiceMetadata['subtotal']
-            : (float) (
-                $currentInvoiceMetadata[
-                    'total_amount'
-                ]
-                ?? $invoice->amount
-                ?? 0
-            );
 
     $currentOutstandingAmount = (float) (
         $currentOutstandingAmount
-        ?? $resolvedCurrentTotal
+        ?? $invoice->amount
+        ?? 0
     );
 
     $grandOutstandingTotal = (float) (
@@ -867,17 +669,6 @@
             Previous unpaid invoices
         </div>
 
-        <div
-            style="
-                margin-top:6px;
-                font-size:9px;
-                color:#6b7280;
-            "
-        >
-            These invoices are from previous billing
-            months and remain unpaid.
-        </div>
-
         <table
             class="line-table"
             width="100%"
@@ -885,18 +676,9 @@
         >
             <thead>
                 <tr>
-                    <th width="39%">
-                        Billing month / invoice
-                    </th>
-
-                    <th width="33%">
-                        Breakdown
-                    </th>
-
-                    <th
-                        width="28%"
-                        class="right"
-                    >
+                    <th width="45%">Invoice</th>
+                    <th width="25%">Due date</th>
+                    <th width="30%" class="right">
                         Outstanding
                     </th>
                 </tr>
@@ -906,65 +688,20 @@
                 @foreach ($previousUnpaidInvoices as $previousInvoice)
                     <tr>
                         <td>
-                            <strong>
-                                {{ $previousInvoice
-                                    ->getAttribute(
-                                        'display_billing_month'
-                                    ) }}
-                            </strong>
-
-                            <br>
-
                             {{ $previousInvoice->invoice_number
                                 ?: 'Invoice #' . $previousInvoice->id }}
-
-                            <br>
-
-                            <span
-                                style="
-                                    color:#6b7280;
-                                    font-size:8px;
-                                "
-                            >
-                                Due:
-                                {{ $previousInvoice
-                                    ->getAttribute(
-                                        'display_due_date'
-                                    ) }}
-                            </span>
                         </td>
 
                         <td>
-                            New charge:
-                            {{ $currency }}
-                            {{ number_format(
-                                (float) $previousInvoice
-                                    ->getAttribute(
-                                        'display_subtotal'
-                                    ),
-                                0
-                            ) }}
-
-                            <br>
-
-                            VAT:
-                            {{ $currency }}
-                            {{ number_format(
-                                (float) $previousInvoice
-                                    ->getAttribute(
-                                        'display_vat_amount'
-                                    ),
-                                0
-                            ) }}
+                            {{ optional(
+                                $previousInvoice->due_date
+                            )->format('d M Y') ?: '—' }}
                         </td>
 
                         <td class="right">
                             {{ $currency }}
                             {{ number_format(
-                                (float) $previousInvoice
-                                    ->getAttribute(
-                                        'display_total_amount'
-                                    ),
+                                (float) $previousInvoice->amount,
                                 0
                             ) }}
                         </td>
@@ -987,27 +724,6 @@
                         {{ $currency }}
                         {{ number_format(
                             $previousOutstandingTotal,
-                            0
-                        ) }}
-                    </td>
-                </tr>
-
-                <tr>
-                    <td
-                        colspan="2"
-                        class="right"
-                        style="font-weight:800;"
-                    >
-                        Current invoice total:
-                    </td>
-
-                    <td
-                        class="right"
-                        style="font-weight:800;"
-                    >
-                        {{ $currency }}
-                        {{ number_format(
-                            $currentOutstandingAmount,
                             0
                         ) }}
                     </td>
@@ -1047,7 +763,7 @@
         </table>
     @endif
 
-    <div
+<div
         class="section-title"
         style="margin-top:30px;"
     >

@@ -3,143 +3,50 @@
         $previousUnpaidInvoices ?? []
     );
 
-    $currentMonthStart = optional(
-        $invoice->invoice_date
-    )
-        ? optional(
-            $invoice->invoice_date
-        )->copy()->startOfMonth()
-        : null;
-
-    /*
-     * Keep only earlier months and select the latest
-     * invoice from every billing month.
-     */
-    $previousUnpaidInvoices =
-        $previousUnpaidInvoices
-            ->filter(
-                function (
-                    $previousInvoice
-                ) use ($currentMonthStart): bool {
-                    if (!$currentMonthStart) {
-                        return true;
-                    }
-
-                    if (
-                        !$previousInvoice->invoice_date
-                    ) {
-                        return false;
-                    }
-
-                    return $previousInvoice
-                        ->invoice_date
-                        ->copy()
-                        ->startOfMonth()
-                        ->lt($currentMonthStart);
-                }
-            )
-            ->groupBy(
-                function (
-                    $previousInvoice
-                ): string {
-                    return optional(
-                        $previousInvoice->invoice_date
-                    )->format('Y-m')
-                        ?: 'invoice-'
-                            . $previousInvoice->id;
-                }
-            )
-            ->map(
-                fn ($monthlyInvoices) =>
-                    $monthlyInvoices
-                        ->sortByDesc('id')
-                        ->first()
-            )
-            ->filter()
-            ->sortBy(
-                fn ($previousInvoice) =>
-                    optional(
-                        $previousInvoice->invoice_date
-                    )->format('Y-m-d')
-                        ?: ''
-            )
-            ->values();
-
     $prepareOutstandingInvoice =
         static function (
             $previousInvoice
         ): void {
-            $metadata = is_array(
+            $previousMetadata = is_array(
                 $previousInvoice->metadata
             )
                 ? $previousInvoice->metadata
                 : [];
 
-            $vatAmount = (float) (
-                $metadata['vat_amount']
-                ?? $metadata['vat']
+            $previousVatAmount = (float) (
+                $previousMetadata['vat_amount']
+                ?? $previousMetadata['vat']
                 ?? 0
             );
 
-            $amountIncludesVat = filter_var(
-                $metadata[
-                    'amount_includes_vat'
-                ] ?? false,
-                FILTER_VALIDATE_BOOLEAN
+            $previousTotalAmount = (float) (
+                $previousMetadata['total_amount']
+                ?? $previousInvoice->amount
+                ?? 0
             );
 
-            $vatCalculation = (string) (
-                $metadata[
-                    'vat_calculation'
-                ] ?? ''
-            );
-
-            $isLegacyAddedVat =
-                $amountIncludesVat
-                && $vatCalculation !==
-                    'deducted_from_invoice_amount'
-                && array_key_exists(
-                    'subtotal',
-                    $metadata
-                );
-
-            if ($isLegacyAddedVat) {
-                $totalAmount = (float)
-                    $metadata['subtotal'];
-
-                $subtotal = max(
-                    $totalAmount - $vatAmount,
+            $previousSubtotal = (float) (
+                $previousMetadata['subtotal']
+                ?? max(
+                    $previousTotalAmount
+                    - $previousVatAmount,
                     0
-                );
-            } else {
-                $totalAmount = (float) (
-                    $metadata['total_amount']
-                    ?? $previousInvoice->amount
-                    ?? 0
-                );
-
-                $subtotal = (float) (
-                    $metadata['subtotal']
-                    ?? max(
-                        $totalAmount - $vatAmount,
-                        0
-                    )
-                );
-            }
+                )
+            );
 
             $previousInvoice->setAttribute(
                 'display_subtotal',
-                $subtotal
+                $previousSubtotal
             );
 
             $previousInvoice->setAttribute(
                 'display_vat_amount',
-                $vatAmount
+                $previousVatAmount
             );
 
             $previousInvoice->setAttribute(
                 'display_total_amount',
-                $totalAmount
+                $previousTotalAmount
             );
 
             $previousInvoice->setAttribute(
@@ -161,14 +68,16 @@
         $prepareOutstandingInvoice
     );
 
-    $previousOutstandingTotal = (float)
-        $previousUnpaidInvoices->sum(
+    $previousOutstandingTotal = (float) (
+        $previousOutstandingTotal
+        ?? $previousUnpaidInvoices->sum(
             fn ($previousInvoice) =>
                 (float) $previousInvoice
                     ->getAttribute(
                         'display_total_amount'
                     )
-        );
+        )
+    );
 
     $currentInvoiceMetadata = is_array(
         $invoice->metadata
@@ -176,43 +85,11 @@
         ? $invoice->metadata
         : [];
 
-    $currentIncludesVat = filter_var(
-        $currentInvoiceMetadata[
-            'amount_includes_vat'
-        ] ?? false,
-        FILTER_VALIDATE_BOOLEAN
-    );
-
-    $currentVatCalculation = (string) (
-        $currentInvoiceMetadata[
-            'vat_calculation'
-        ] ?? ''
-    );
-
-    $currentIsLegacyAddedVat =
-        $currentIncludesVat
-        && $currentVatCalculation !==
-            'deducted_from_invoice_amount'
-        && array_key_exists(
-            'subtotal',
-            $currentInvoiceMetadata
-        );
-
-    $resolvedCurrentTotal =
-        $currentIsLegacyAddedVat
-            ? (float)
-                $currentInvoiceMetadata['subtotal']
-            : (float) (
-                $currentInvoiceMetadata[
-                    'total_amount'
-                ]
-                ?? $invoice->amount
-                ?? 0
-            );
-
     $currentOutstandingAmount = (float) (
         $currentOutstandingAmount
-        ?? $resolvedCurrentTotal
+        ?? $currentInvoiceMetadata['total_amount']
+        ?? $invoice->amount
+        ?? 0
     );
 
     $grandOutstandingTotal = (float) (

@@ -104,17 +104,6 @@ class PropertyInvoiceNotification extends Notification
             Invoice::PAYMENT_STATUS_OVERDUE,
         ];
 
-        $currentMonthStart = $invoice->invoice_date
-            ? $invoice->invoice_date
-                ->copy()
-                ->startOfMonth()
-            : null;
-
-        /*
-         * Only include invoices from earlier billing months.
-         * When a month contains duplicate invoices, keep the
-         * latest invoice record for that month.
-         */
         $previousUnpaidInvoices = Invoice::query()
             ->where(
                 'id',
@@ -128,19 +117,6 @@ class PropertyInvoiceNotification extends Notification
             ->whereIn(
                 'payment_status',
                 $outstandingStatuses
-            )
-            ->when(
-                $currentMonthStart,
-                function ($query) use (
-                    $currentMonthStart
-                ) {
-                    $query->whereDate(
-                        'invoice_date',
-                        '<',
-                        $currentMonthStart
-                            ->toDateString()
-                    );
-                }
             )
             ->where(function ($query) use (
                 $invoice,
@@ -179,38 +155,12 @@ class PropertyInvoiceNotification extends Notification
                     ]
                 );
             })
-            ->orderByDesc('invoice_date')
-            ->orderByDesc('id')
-            ->get()
-            ->groupBy(
-                function (
-                    Invoice $previousInvoice
-                ): string {
-                    return optional(
-                        $previousInvoice->invoice_date
-                    )->format('Y-m')
-                        ?: 'invoice-'
-                            . $previousInvoice->id;
-                }
-            )
-            ->map(
-                fn ($monthlyInvoices) =>
-                    $monthlyInvoices
-                        ->sortByDesc('id')
-                        ->first()
-            )
-            ->filter()
-            ->sortBy(
-                fn (Invoice $previousInvoice) =>
-                    optional(
-                        $previousInvoice->invoice_date
-                    )->format('Y-m-d')
-                        ?: ''
-            )
-            ->values();
+            ->orderBy('invoice_date')
+            ->orderBy('id')
+            ->get();
 
-        $prepareOutstandingInvoice =
-            static function (
+        $previousUnpaidInvoices->each(
+            function (
                 Invoice $previousInvoice
             ): void {
                 $previousMetadata = is_array(
@@ -219,87 +169,40 @@ class PropertyInvoiceNotification extends Notification
                     ? $previousInvoice->metadata
                     : [];
 
-                $vatAmount = (float) (
+                $previousVatAmount = (float) (
                     $previousMetadata['vat_amount']
                     ?? $previousMetadata['vat']
                     ?? 0
                 );
 
-                $amountIncludesVat = filter_var(
-                    $previousMetadata[
-                        'amount_includes_vat'
-                    ] ?? false,
-                    FILTER_VALIDATE_BOOLEAN
+                $previousTotalAmount = (float) (
+                    $previousMetadata['total_amount']
+                    ?? $previousInvoice->amount
+                    ?? 0
                 );
 
-                $vatCalculation = (string) (
-                    $previousMetadata[
-                        'vat_calculation'
-                    ] ?? ''
-                );
-
-                /*
-                 * Older records added VAT on top even though
-                 * the entered amount already included VAT.
-                 *
-                 * Example:
-                 * old subtotal = 800,000
-                 * VAT = 144,000
-                 * old total = 944,000
-                 *
-                 * Correct:
-                 * subtotal = 656,000
-                 * VAT = 144,000
-                 * total = 800,000
-                 */
-                $isLegacyAddedVat =
-                    $amountIncludesVat
-                    && $vatCalculation !==
-                        'deducted_from_invoice_amount'
-                    && array_key_exists(
-                        'subtotal',
-                        $previousMetadata
-                    );
-
-                if ($isLegacyAddedVat) {
-                    $totalAmount = (float)
-                        $previousMetadata['subtotal'];
-
-                    $subtotal = max(
-                        $totalAmount - $vatAmount,
+                $previousSubtotal = (float) (
+                    $previousMetadata['subtotal']
+                    ?? max(
+                        $previousTotalAmount
+                        - $previousVatAmount,
                         0
-                    );
-                } else {
-                    $totalAmount = (float) (
-                        $previousMetadata[
-                            'total_amount'
-                        ]
-                        ?? $previousInvoice->amount
-                        ?? 0
-                    );
-
-                    $subtotal = (float) (
-                        $previousMetadata['subtotal']
-                        ?? max(
-                            $totalAmount - $vatAmount,
-                            0
-                        )
-                    );
-                }
+                    )
+                );
 
                 $previousInvoice->setAttribute(
                     'display_subtotal',
-                    $subtotal
+                    $previousSubtotal
                 );
 
                 $previousInvoice->setAttribute(
                     'display_vat_amount',
-                    $vatAmount
+                    $previousVatAmount
                 );
 
                 $previousInvoice->setAttribute(
                     'display_total_amount',
-                    $totalAmount
+                    $previousTotalAmount
                 );
 
                 $previousInvoice->setAttribute(
@@ -315,10 +218,7 @@ class PropertyInvoiceNotification extends Notification
                         $previousInvoice->due_date
                     )->format('d M Y') ?: '—'
                 );
-            };
-
-        $previousUnpaidInvoices->each(
-            $prepareOutstandingInvoice
+            }
         );
 
         $previousOutstandingTotal = (float)
@@ -336,51 +236,16 @@ class PropertyInvoiceNotification extends Notification
             ? $invoice->metadata
             : [];
 
-        $currentVatAmount = (float) (
-            $currentMetadata['vat_amount']
-            ?? $currentMetadata['vat']
-            ?? 0
-        );
-
-        $currentIncludesVat = filter_var(
-            $currentMetadata[
-                'amount_includes_vat'
-            ] ?? false,
-            FILTER_VALIDATE_BOOLEAN
-        );
-
-        $currentVatCalculation = (string) (
-            $currentMetadata[
-                'vat_calculation'
-            ] ?? ''
-        );
-
-        $currentIsLegacyAddedVat =
-            $currentIncludesVat
-            && $currentVatCalculation !==
-                'deducted_from_invoice_amount'
-            && array_key_exists(
-                'subtotal',
-                $currentMetadata
-            );
-
-        if ($currentIsLegacyAddedVat) {
-            $resolvedCurrentTotal = (float)
-                $currentMetadata['subtotal'];
-        } else {
-            $resolvedCurrentTotal = (float) (
-                $currentMetadata['total_amount']
-                ?? $invoice->amount
-                ?? 0
-            );
-        }
-
         $currentOutstandingAmount = in_array(
             $paymentStatus,
             $outstandingStatuses,
             true
         )
-            ? $resolvedCurrentTotal
+            ? (float) (
+                $currentMetadata['total_amount']
+                ?? $invoice->amount
+                ?? 0
+            )
             : 0.0;
 
         $grandOutstandingTotal =
